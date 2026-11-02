@@ -218,3 +218,28 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ----------------------------------------------------
+# Research & ML Project Specific (Never commit raw data)
+# ----------------------------------------------------
+data/raw/
+data/cache/
+*.parquet
+*.pkl
+*.pickle
+*.zip
+*.tar.gz
+
+# Model weights & checkpoints
+models/*.h5
+models/*.keras
+models/*.tflite
+models/*.pt
+checkpoints/
+
+# Keep label metadata & small table exports
+!data/labels/
+!data/labels/.gitkeep
+!results/tables/
+!results/tables/.gitkeep
+
