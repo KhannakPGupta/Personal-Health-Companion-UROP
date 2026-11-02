@@ -1,0 +1,73 @@
+# Base Experimentation Configuration for Wrist-Wearable Strain Detection
+
+project:
+  name: "wearable-strain-edge-companion"
+  author: "Khannak P Gupta"
+  experiment_phase: "Phase 1: Physiological Strain Classification"
+
+seeds:
+  - 42
+  - 101
+  - 202
+  - 303
+  - 404
+
+datasets:
+  wesad:
+    raw_dir: "data/raw/WESAD"
+    subjects: ["S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S13", "S14", "S15", "S16", "S17"] # Note: S12 omitted in Siegen/UCI distribution
+    pickle_encoding: "latin1"
+    wrist_sampling_rates:
+      bvp_hz: 64
+      eda_hz: 4
+      temp_hz: 4
+      acc_hz: 32
+    label_mapping:
+      0: "not_defined"
+      1: "baseline"
+      2: "stress"
+      3: "amusement"
+      4: "meditation"
+    binary_target:
+      strain: [2]            # stress
+      baseline: [1, 3]       # baseline + amusement (sensitivity test excludes 3)
+      drop: [0, 4, 5, 6, 7]
+
+  physionet:
+    raw_dir: "data/raw/physionet_wearable"
+    version: "1.0.1"
+    doi: "10.13026/zzf8-xv61"
+    sessions: ["STRESS", "AEROBIC", "ANAEROBIC"]
+    acc_scale_factor: 0.015625 # 1/64 g to g
+    constraints_file: "data_constraints.txt"
+
+windowing:
+  primary_window_sec: 60.0
+  primary_step_sec: 30.0
+  ablation_window_sec: 30.0
+  ablation_step_sec: 15.0
+  boundary_tolerance_sec: 0.0 # Drop any window overlapping segment boundaries
+
+features:
+  common_resampled_hz: 32
+  bvp_bandpass: [0.5, 8.0]
+  hrv_metrics: ["rmssd", "sdnn", "pnn50"]
+  eda_features: ["mean", "std", "slope", "tonic_level", "phasic_peaks", "phasic_amplitude_sum"]
+  temp_features: ["mean", "std", "slope"]
+  acc_features: ["magnitude_mean", "magnitude_std", "energy"]
+  quality_features: ["fraction_invalid_bvp", "high_motion_fraction"]
+
+models:
+  cnn_1d:
+    max_params: 50000
+    channels: 6 # BVP, EDA, TEMP, ACC_x, ACC_y, ACC_z
+    sequence_length: 1920 # 60s * 32Hz
+    early_stopping_patience: 10
+  tflite:
+    quantization: "int8"
+
+evaluation:
+  protocol: "LOSO" # Leave-One-Subject-Out
+  bootstrap_iterations: 1000
+  confidence_interval: 0.95
+  persistence_rule: "3_of_5"
