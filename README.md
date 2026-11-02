@@ -78,7 +78,7 @@ wget -r -N -c -np https://physionet.org/files/wearable-device-dataset/1.0.1/ -P 
 - **Phase 1A**: Cross-platform dataset loaders, integrity verification & acquisition tools *(Completed)*.
 - **Phase 1B**: Unified segment labeling & Checkpoint 1 sign-off (`data/labels/segment_labels.csv`) *(Completed)*.
 - **Phase 1C**: Signal preprocessing, quality gating, normalizers & 32 Hz CNN tensor pipelines *(Completed)*.
-- **Phase 1D**: Model training (M0, M1, M2), LOSO evaluation & Checkpoint 2 sign-off.
+- **Phase 1D**: Baseline models (M0, M1), edge 1D-CNN (M2 < 50k params), int8 quantizer, and LOSO evaluation engine *(Completed)*.
 - **Phase 1E**: Cross-dataset transfer & sensor ablations.
 - **Phase 2**: Ambient AQI model & contextual fusion demo *(Pending approval)*.
 - **Phase 3**: Federated edge simulation *(Pending approval)*.
