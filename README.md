@@ -76,9 +76,9 @@ wget -r -N -c -np https://physionet.org/files/wearable-device-dataset/1.0.1/ -P 
 ## 5. Execution Roadmap
 - **Phase 0**: Repository scaffolding, experiment configuration & leakage assertions *(Completed)*.
 - **Phase 1A**: Cross-platform dataset loaders, integrity verification & acquisition tools *(Completed)*.
-- **Phase 1B**: Unified segment labeling & Checkpoint 1 sign-off (`data/labels/segment_labels.csv`).
-- **Phase 1C**: Signal preprocessing, quality gating & feature extraction.
-- **Phase 1D**: Model training, LOSO evaluation & Checkpoint 2 sign-off.
+- **Phase 1B**: Unified segment labeling & Checkpoint 1 sign-off (`data/labels/segment_labels.csv`) *(Completed)*.
+- **Phase 1C**: Signal preprocessing, quality gating, normalizers & 32 Hz CNN tensor pipelines *(Completed)*.
+- **Phase 1D**: Model training (M0, M1, M2), LOSO evaluation & Checkpoint 2 sign-off.
 - **Phase 1E**: Cross-dataset transfer & sensor ablations.
 - **Phase 2**: Ambient AQI model & contextual fusion demo *(Pending approval)*.
 - **Phase 3**: Federated edge simulation *(Pending approval)*.
