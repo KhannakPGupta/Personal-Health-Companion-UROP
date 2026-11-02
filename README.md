@@ -50,9 +50,32 @@ Research prototype for an on-device, secure Personal Health Companion designed t
 
 ---
 
-## 4. Execution Roadmap
+## 4. Dataset Acquisition & Verification (Any Platform)
+
+The project includes platform-independent loaders and verification utilities:
+
+```bash
+# 1. Verify tests & leakage assertions
+python -m unittest discover tests
+
+# 2. Verify dataset availability and integrity
+python src/io/verify_data.py
+
+# 3. Automatically download WESAD (UCI / Siegen mirror)
+python src/io/download.py --dataset wesad
+
+# 4. Sync PhysioNet Wearable v1.0.1 (via wget or AWS CLI)
+# Using AWS Open Data (fastest):
+aws s3 sync --no-sign-request s3://physionet-open/wearable-device-dataset/1.0.1/ data/raw/physionet_wearable/1.0.1
+# Or via wget:
+wget -r -N -c -np https://physionet.org/files/wearable-device-dataset/1.0.1/ -P data/raw/physionet_wearable/
+```
+
+---
+
+## 5. Execution Roadmap
 - **Phase 0**: Repository scaffolding, experiment configuration & leakage assertions *(Completed)*.
-- **Phase 1A**: Raw dataset acquisition & sanity visualization.
+- **Phase 1A**: Cross-platform dataset loaders, integrity verification & acquisition tools *(Completed)*.
 - **Phase 1B**: Unified segment labeling & Checkpoint 1 sign-off (`data/labels/segment_labels.csv`).
 - **Phase 1C**: Signal preprocessing, quality gating & feature extraction.
 - **Phase 1D**: Model training, LOSO evaluation & Checkpoint 2 sign-off.
