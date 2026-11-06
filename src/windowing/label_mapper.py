@@ -73,32 +73,57 @@ def map_wesad_label(raw_code: int, include_amusement_as_baseline: bool = True) -
         return None
 
 
-def get_physionet_stress_segments(tags: np.ndarray, protocol_type: str = "S") -> List[SegmentBoundary]:
+def get_physionet_stress_segments(
+    tags: np.ndarray,
+    protocol_type: str = "S",
+    rec_start_sec: Optional[float] = None,
+) -> List[SegmentBoundary]:
     """Build protocol segment boundaries for PhysioNet STRESS sessions using tags.csv.
     
-    PhysioNet Stress Protocol:
-      - Initial Baseline / Rest -> Baseline (0)
-      - Stressor Blocks (Stroop, Mental Arithmetic, Cold Pressor / Public Speaking) -> Strain (1)
-      - Intermediate Rest Periods -> Baseline (0)
-      
-    Args:
-        tags: Timestamps of tag markers pressed during experiment.
-        protocol_type: 'S' (standard) or 'f' (variant protocol).
-        
-    Returns:
-        List of SegmentBoundary objects with assigned binary labels.
+    PhysioNet Stress Protocol (Hong et al. / Empatica E4 v1.0.1):
+      - Protocol 'S' (v1, S01..S18, ~12 tags):
+        * [rec_start, tags[0]] & [tags[0], tags[1]]: Initial Baseline Rest -> Baseline (0)
+        * [tags[1], tags[3]]: Stroop + Trier Mental Challenge Test (TMCT) -> Strain (1)
+        * [tags[3], tags[4]]: First 5-min Recovery Rest -> Baseline (0)
+        * [tags[4], tags[5]]: Public Speaking / Opposite Opinion Stress Task -> Strain (1)
+        * [tags[5], tags[6]]: Second 5-min Recovery Rest -> Baseline (0)
+        * [tags[6], tags[-1]]: Mental Arithmetic (Subtracting 13 countdown blocks) -> Strain (1)
+      - Protocol 'f' (v2, f01..f18, ~8 tags):
+        * [tags[0], tags[1]]: Initial Baseline Rest -> Baseline (0)
+        * [tags[1], tags[2]]: Stress Task Block 1 (TMCT / Stroop) -> Strain (1)
+        * [tags[2], tags[3]]: First Recovery Rest -> Baseline (0)
+        * [tags[3], tags[6]]: Stress Task Block 2 (Speaking + Mental Arithmetic) -> Strain (1)
+        * [tags[6], tags[7]]: Second Recovery Rest -> Baseline (0)
     """
     segments: List[SegmentBoundary] = []
     if len(tags) < 2:
         return segments
 
-    # Protocol segment partitioning based on tag markers
-    # Tag 0: start baseline; Tag 1: start stress task 1; etc.
+    if rec_start_sec is not None and (tags[0] - rec_start_sec) >= 60.0:
+        segments.append(SegmentBoundary("pre_tag_baseline", float(rec_start_sec), float(tags[0]), BinaryStrainLabel.BASELINE))
+
+    if str(protocol_type).startswith("S") and len(tags) >= 7:
+        segments.append(SegmentBoundary("rest_block_0", float(tags[0]), float(tags[1]), BinaryStrainLabel.BASELINE))
+        segments.append(SegmentBoundary("stress_stroop_tmct", float(tags[1]), float(tags[3]), BinaryStrainLabel.ELEVATED_STRAIN))
+        segments.append(SegmentBoundary("rest_recovery_1", float(tags[3]), float(tags[4]), BinaryStrainLabel.BASELINE))
+        segments.append(SegmentBoundary("stress_speaking", float(tags[4]), float(tags[5]), BinaryStrainLabel.ELEVATED_STRAIN))
+        segments.append(SegmentBoundary("rest_recovery_2", float(tags[5]), float(tags[6]), BinaryStrainLabel.BASELINE))
+        if tags[-1] > tags[6]:
+            segments.append(SegmentBoundary("stress_arithmetic", float(tags[6]), float(tags[-1]), BinaryStrainLabel.ELEVATED_STRAIN))
+        return segments
+
+    if str(protocol_type).startswith("f") and len(tags) >= 7:
+        segments.append(SegmentBoundary("rest_block_0", float(tags[0]), float(tags[1]), BinaryStrainLabel.BASELINE))
+        segments.append(SegmentBoundary("stress_task_1", float(tags[1]), float(tags[2]), BinaryStrainLabel.ELEVATED_STRAIN))
+        segments.append(SegmentBoundary("rest_recovery_1", float(tags[2]), float(tags[3]), BinaryStrainLabel.BASELINE))
+        segments.append(SegmentBoundary("stress_task_2", float(tags[3]), float(tags[6]), BinaryStrainLabel.ELEVATED_STRAIN))
+        segments.append(SegmentBoundary("rest_recovery_2", float(tags[6]), float(tags[7]), BinaryStrainLabel.BASELINE))
+        return segments
+
+    # Fallback alternating task vs rest blocks
     for i in range(len(tags) - 1):
-        start = tags[i]
-        end = tags[i + 1]
-        # Alternating task vs rest blocks typical in the Trier Social Stress Test (TSST) structure
-        # Even segments (0, 2, ...): baseline/rest; Odd segments (1, 3, ...): stressors
+        start = float(tags[i])
+        end = float(tags[i + 1])
         if i % 2 == 0:
             segments.append(SegmentBoundary(f"rest_block_{i}", start, end, BinaryStrainLabel.BASELINE))
         else:
@@ -107,41 +132,42 @@ def get_physionet_stress_segments(tags: np.ndarray, protocol_type: str = "S") ->
     return segments
 
 
-def get_physionet_exercise_segments(tags: np.ndarray, session_type: str = "AEROBIC") -> List[SegmentBoundary]:
+def get_physionet_exercise_segments(
+    tags: np.ndarray,
+    session_type: str = "AEROBIC",
+    rec_start_sec: Optional[float] = None,
+) -> List[SegmentBoundary]:
     """Build protocol segment boundaries for PhysioNet AEROBIC / ANAEROBIC exercise sessions.
     
     Protocol:
-      - Baseline seated rest -> Baseline (0)
+      - Pre-tag & initial seated rest -> Baseline (0)
       - Warm-up -> Transitional (None / dropped)
-      - Pedalling with load & sprints -> Elevated Strain (1)
-      - No-resistance cooldown -> Transitional (None / dropped)
-      - Final seated recovery rest -> Baseline (0)
-      
-    Args:
-        tags: Event tag timestamps.
-        session_type: 'AEROBIC' or 'ANAEROBIC'.
-        
-    Returns:
-        List of SegmentBoundary objects.
+      - Incremental loaded pedalling & maximal sprints -> Elevated Strain (1)
+      - Cooldown -> Transitional (None / dropped)
     """
     segments: List[SegmentBoundary] = []
     if len(tags) < 4:
         return segments
 
-    # Minimum 4 tags expected:
-    # [t0, t1]: Initial baseline rest -> Baseline (0)
-    # [t1, t2]: Warm-up -> Dropped (None)
-    # [t2, t3]: Loaded exercise / sprints -> Strain (1)
-    # [t3, t4]: Cooldown -> Dropped (None)
-    # [t4, ...]: Final seated recovery -> Baseline (0)
-    
-    segments.append(SegmentBoundary("initial_baseline", tags[0], tags[1], BinaryStrainLabel.BASELINE))
-    segments.append(SegmentBoundary("warmup_transitional", tags[1], tags[2], None))
-    segments.append(SegmentBoundary("exercise_strain", tags[2], tags[3], BinaryStrainLabel.ELEVATED_STRAIN))
+    if rec_start_sec is not None and (tags[0] - rec_start_sec) >= 60.0:
+        segments.append(SegmentBoundary("pre_exercise_baseline", float(rec_start_sec), float(tags[0]), BinaryStrainLabel.BASELINE))
+
+    segments.append(SegmentBoundary("initial_baseline", float(tags[0]), float(tags[1]), BinaryStrainLabel.BASELINE))
+    segments.append(SegmentBoundary("warmup_transitional", float(tags[1]), float(tags[2]), None))
+
+    if rec_start_sec is not None and len(tags) >= 5:
+        # In real PhysioNet Stationary Bike protocol, tags[2]..tags[-2] are incremental RPM / sprint stages
+        strain_end = float(tags[-2]) if len(tags) >= 6 else float(tags[-1])
+        segments.append(SegmentBoundary("exercise_strain", float(tags[2]), strain_end, BinaryStrainLabel.ELEVATED_STRAIN))
+        if len(tags) >= 6:
+            segments.append(SegmentBoundary("cooldown_transitional", float(tags[-2]), float(tags[-1]), None))
+        return segments
+
+    segments.append(SegmentBoundary("exercise_strain", float(tags[2]), float(tags[3]), BinaryStrainLabel.ELEVATED_STRAIN))
 
     if len(tags) >= 5:
-        segments.append(SegmentBoundary("cooldown_transitional", tags[3], tags[4], None))
+        segments.append(SegmentBoundary("cooldown_transitional", float(tags[3]), float(tags[4]), None))
         if len(tags) >= 6:
-            segments.append(SegmentBoundary("final_recovery", tags[4], tags[5], BinaryStrainLabel.BASELINE))
+            segments.append(SegmentBoundary("final_recovery", float(tags[4]), float(tags[5]), BinaryStrainLabel.BASELINE))
 
     return segments

@@ -183,12 +183,13 @@ def run_normalization_ablation(
     rows = []
     feat_cols = [c for c in TABULAR_FEATURE_COLS if c in df_features.columns]
 
-    # 1. Global train-fold Z-Score normalization (Primary)
+    # 1. Global train-fold Z-Score normalization without subject calibration
     _, global_summary = run_loso_evaluation(
         df_features=df_features,
         model_name=tabular_model,
         feature_cols=feat_cols,
         dataset_name=dataset_name,
+        use_subject_session_calibration=False,
     )
     if global_summary:
         global_summary["ablation_type"] = "normalization_strategy"
@@ -196,7 +197,21 @@ def run_normalization_ablation(
         global_summary["n_features_or_channels"] = len(feat_cols)
         rows.append(global_summary)
 
-    # 2. Per-subject resting baseline normalization (Sensitivity)
+    # 2. Unsupervised resting-prefix & session calibration (Primary Label-Free)
+    _, unsup_summary = run_loso_evaluation(
+        df_features=df_features,
+        model_name=tabular_model,
+        feature_cols=feat_cols,
+        dataset_name=dataset_name,
+        use_subject_session_calibration=True,
+    )
+    if unsup_summary:
+        unsup_summary["ablation_type"] = "normalization_strategy"
+        unsup_summary["configuration"] = "UnsupervisedRestingPrefixCalibrated"
+        unsup_summary["n_features_or_channels"] = len(feat_cols)
+        rows.append(unsup_summary)
+
+    # 3. Per-subject resting baseline normalization (Sensitivity)
     sub_norm = PerSubjectBaselineNormalizer(feature_cols=feat_cols)
     df_per_sub = sub_norm.normalize(df_features, label_col="label")
     _, sub_summary = run_loso_evaluation(
@@ -204,6 +219,7 @@ def run_normalization_ablation(
         model_name=tabular_model,
         feature_cols=feat_cols,
         dataset_name=dataset_name,
+        use_subject_session_calibration=False,
     )
     if sub_summary:
         sub_summary["ablation_type"] = "normalization_strategy"

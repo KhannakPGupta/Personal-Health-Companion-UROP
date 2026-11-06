@@ -293,3 +293,4 @@ def run_phase2_fusion_demo(out_dir: Path = Path("results/tables")) -> pd.DataFra
 
 if __name__ == "__main__":
     run_phase2_fusion_demo()
+

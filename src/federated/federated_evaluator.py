@@ -22,7 +22,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.eval.metrics import compute_classification_metrics, bootstrap_subject_confidence_intervals
-from src.eval.loso_evaluator import run_cnn_loso_evaluation
+from src.eval.loso_evaluator import (
+    run_cnn_loso_evaluation,
+    select_optimal_threshold_on_val,
+    standardize_subject_tensors_unsupervised,
+)
 from src.eval.run_phase1_experiments import generate_synthetic_cohort
 from src.federated.fedavg import EdgeClientData, run_federated_training
 from tests.test_leakage_assertion import assert_no_subject_leakage
@@ -48,6 +52,7 @@ def run_federated_loso_evaluation(
     X_all = np.asarray(tensors, dtype=np.float32)
     if X_all.ndim == 3 and X_all.shape[1] > X_all.shape[2]:
         X_all = np.transpose(X_all, (0, 2, 1))
+    X_all = standardize_subject_tensors_unsupervised(X_all, subject_ids_arr)
     y_all = np.asarray(labels, dtype=np.float32)
 
     per_subject_rows = []
@@ -153,8 +158,12 @@ def main() -> None:
         df_all = pd.read_csv(feat_60_path)
         ten_all = np.load(ten_60_path)["tensors"]
         mask = (df_all["session"] == "STRESS").values
-        df_wesad = df_all[mask].reset_index(drop=True)
-        ten_wesad = ten_all[mask]
+        df_stress = df_all[mask].reset_index(drop=True)
+        ten_stress = ten_all[mask]
+        selected_subs = sorted(df_stress["subject_id"].unique())[:12]
+        sub_mask = df_stress["subject_id"].isin(selected_subs).values
+        df_wesad = df_stress[sub_mask].reset_index(drop=True)
+        ten_wesad = ten_stress[sub_mask]
         ds_name = "PhysioNet_STRESS"
     else:
         df_wesad, ten_wesad = generate_synthetic_cohort(

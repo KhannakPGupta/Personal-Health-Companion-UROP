@@ -59,13 +59,17 @@ def extract_physionet_cohort(
                 if sess_data is None or len(sess_data.tags) == 0:
                     continue
 
+                rec_start = sess_data.bvp.start_time
                 if sess_type == "STRESS":
-                    segments = get_physionet_stress_segments(sess_data.tags, sess_data.protocol_type)
+                    segments = get_physionet_stress_segments(
+                        sess_data.tags, sess_data.protocol_type, rec_start_sec=rec_start
+                    )
                 else:
-                    segments = get_physionet_exercise_segments(sess_data.tags, sess_type)
+                    segments = get_physionet_exercise_segments(
+                        sess_data.tags, sess_type, rec_start_sec=rec_start
+                    )
 
                 total_duration = len(sess_data.bvp.data) / sess_data.bvp.sample_rate_hz
-                rec_start = sess_data.bvp.start_time
                 windows = generate_sliding_windows(
                     total_duration, window_sec=window_sec, step_sec=step_sec, start_offset_sec=rec_start
                 )

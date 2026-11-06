@@ -217,3 +217,4 @@ def generate_synthetic_cpcb_aqi_data(n_days: int = 120, seed: int = 42) -> pd.Da
             })
 
     return pd.DataFrame(rows)
+

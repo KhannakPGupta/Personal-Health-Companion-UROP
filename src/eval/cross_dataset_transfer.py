@@ -17,9 +17,14 @@ import numpy as np
 import pandas as pd
 import torch
 
-from src.features.normalizer import GlobalZScoreNormalizer
+from src.features.normalizer import (
+    GlobalZScoreNormalizer,
+    UnsupervisedSubjectSessionCalibrator,
+    augment_autonomic_features,
+)
 from src.eval.metrics import compute_classification_metrics, bootstrap_subject_confidence_intervals
 from src.eval.calibration import SubjectCalibrator
+from src.eval.loso_evaluator import select_optimal_threshold_on_val, standardize_subject_tensors_unsupervised
 from src.models.cnn_1d import LightweightStrainCNN, train_cnn_with_early_stopping
 from tests.test_leakage_assertion import assert_no_subject_leakage
 
@@ -67,11 +72,29 @@ def run_cross_dataset_tabular_transfer(
     # Enforce zero overlap between source and target subject IDs
     assert_no_subject_leakage(src_subjects, tgt_subjects)
 
-    normalizer = GlobalZScoreNormalizer(feature_cols=feature_cols)
-    normalizer.fit(df_source)
+    df_src_aug = augment_autonomic_features(df_source)
+    df_tgt_aug = augment_autonomic_features(df_target)
+    extra_cols = [
+        c for c in [
+            "sympathovagal_ratio",
+            "hr_dynamic_range",
+            "eda_arousal_index",
+            "eda_phasic_tonic_ratio",
+            "motion_adjusted_hr",
+        ]
+        if c in df_src_aug.columns and len(feature_cols) >= 10
+    ]
+    active_cols = list(dict.fromkeys([c for c in feature_cols if c in df_src_aug.columns] + extra_cols))
 
-    norm_source = normalizer.transform(df_source)
-    norm_target = normalizer.transform(df_target)
+    unsup_cal = UnsupervisedSubjectSessionCalibrator(feature_cols=active_cols)
+    df_src_cal = unsup_cal.transform(df_src_aug)
+    df_tgt_cal = unsup_cal.transform(df_tgt_aug)
+
+    normalizer = GlobalZScoreNormalizer(feature_cols=active_cols)
+    normalizer.fit(df_src_cal)
+
+    norm_source = normalizer.transform(df_src_cal)
+    norm_target = normalizer.transform(df_tgt_cal)
 
     calibrator: Optional[SubjectCalibrator] = None
     if calibrate_on_source_val and len(src_subjects) >= 3:
@@ -82,19 +105,23 @@ def run_cross_dataset_tabular_transfer(
 
         if len(inner_val_df["label"].unique()) >= 2 and len(inner_train_df["label"].unique()) >= 2:
             clf_inner = _instantiate_tabular_model(model_name, random_seed=random_seed)
-            clf_inner.fit(inner_train_df[feature_cols].values, inner_train_df["label"].values.astype(int))
+            clf_inner.fit(inner_train_df[active_cols].values, inner_train_df["label"].values.astype(int))
             val_probs = (
-                clf_inner.predict_proba(inner_val_df[feature_cols].values)[:, 1]
+                clf_inner.predict_proba(inner_val_df[active_cols].values)[:, 1]
                 if clf_inner.classes_.size > 1
                 else np.zeros(len(inner_val_df))
             )
             calibrator = SubjectCalibrator(method="sigmoid").fit(val_probs, inner_val_df["label"].values.astype(int))
 
     # Fit final model on full source dataset
-    X_src = norm_source[feature_cols].values
+    X_src = np.nan_to_num(norm_source[active_cols].values, nan=0.0, posinf=0.0, neginf=0.0)
     y_src = norm_source["label"].values.astype(int)
     clf = _instantiate_tabular_model(model_name, random_seed=random_seed)
     clf.fit(X_src, y_src)
+    src_probs = clf.predict_proba(X_src)[:, 1] if clf.classes_.size > 1 else np.zeros(len(X_src))
+    if calibrator is not None:
+        src_probs = calibrator.predict_proba(src_probs)
+    best_tau = select_optimal_threshold_on_val(y_src, src_probs)
 
     per_subject_rows = []
     for test_sub in tgt_subjects:
@@ -103,11 +130,11 @@ def run_cross_dataset_tabular_transfer(
         if len(np.unique(y_test)) < 2:
             continue
 
-        X_test = sub_df[feature_cols].values
+        X_test = np.nan_to_num(sub_df[active_cols].values, nan=0.0, posinf=0.0, neginf=0.0)
         raw_probs = clf.predict_proba(X_test)[:, 1] if clf.classes_.size > 1 else np.zeros(len(X_test))
         probs = calibrator.predict_proba(raw_probs) if calibrator is not None else raw_probs
 
-        metrics = compute_classification_metrics(y_test, probs)
+        metrics = compute_classification_metrics(y_test, probs, threshold=best_tau)
         metrics["subject_id"] = str(test_sub)
         metrics["direction"] = f"{source_name}->{target_name}"
         metrics["model"] = model_name
@@ -171,6 +198,9 @@ def run_cross_dataset_cnn_transfer(
         X_src = np.transpose(X_src, (0, 2, 1))
     if X_tgt.ndim == 3 and X_tgt.shape[1] > X_tgt.shape[2]:
         X_tgt = np.transpose(X_tgt, (0, 2, 1))
+
+    X_src = standardize_subject_tensors_unsupervised(X_src, src_subs_arr)
+    X_tgt = standardize_subject_tensors_unsupervised(X_tgt, tgt_subs_arr)
 
     y_src = np.asarray(src_labels, dtype=np.float32)
     y_tgt = np.asarray(tgt_labels, dtype=np.float32)
@@ -243,3 +273,4 @@ def run_cross_dataset_cnn_transfer(
     summary["macro_f1_95ci_upper"] = round(ci_high, 4)
 
     return res_df, summary
+

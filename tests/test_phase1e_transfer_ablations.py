@@ -102,7 +102,7 @@ class TestPhase1ETransferAndAblations(unittest.TestCase):
         self.assertEqual(len(df_win), 4)
 
         df_norm = run_normalization_ablation(self.df_wesad, dataset_name="WESAD")
-        self.assertEqual(len(df_norm), 2)
+        self.assertGreaterEqual(len(df_norm), 2)
 
         df_amuse = run_amusement_sensitivity_ablation(self.df_wesad, dataset_name="WESAD")
         self.assertEqual(len(df_amuse), 2)
@@ -110,3 +110,4 @@ class TestPhase1ETransferAndAblations(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

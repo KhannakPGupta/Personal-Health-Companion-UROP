@@ -35,7 +35,7 @@ Wearable health monitors often suffer from three critical limitations when deplo
 3. **Cloud Privacy & Bandwidth Constraints:** Streaming continuous 64 Hz raw photoplethysmography (BVP) and electrodermal activity (EDA) waveforms to cloud servers compromises user privacy and drains wearable battery life.
 
 This project designs, implements, and empirically evaluates a **three-phase on-device Personal Health Companion**:
-* **Phase 1 (On-Device Physiological Strain Detection):** Evaluates classical baselines (`M0`), tree ensembles (`M1`), and an ultra-lightweight 1D-CNN (`M2`, **8,833 parameters**, `< 42 KB`, **1.00 ms** median CPU inference latency) under strict **Leave-One-Subject-Out (LOSO)** validation, cross-protocol transfer (`STRESS <-> EXERCISE`), and systematic sensor/window/normalization ablations.
+* **Phase 1 (On-Device Physiological Strain Detection):** Evaluates classical baselines (`M0`), tree ensembles (`M1`), and an ultra-lightweight 1D-CNN (`M2`, **12,161 parameters**, `51.2 KB` quantized, **1.81 ms** median CPU inference latency) with label-free resting-prefix subject calibration and autonomic interaction ratios under strict **Leave-One-Subject-Out (LOSO)** validation, cross-protocol transfer (`STRESS <-> EXERCISE`), and systematic sensor/window/normalization ablations.
 * **Phase 2 (Contextual Physiological-Environmental Fusion):** Combines calibrated wearable strain probabilities, a **3-of-5 temporal persistence filter**, wrist actigraphy motion gating (`high_motion_fraction`), and the **Central Pollution Control Board (CPCB) National Air Quality Index (NAQI)** into a four-tier actionable alert hierarchy (`NORMAL`, `ADVISORY`, `WARNING`, `CRITICAL_ALERT`).
 * **Phase 3 (Privacy-Preserving Federated Edge Learning):** Simulates decentralized training where each wearable participant acts as an isolated edge client using **Federated Averaging (`FedAvg`)** and **Federated Proximal (`FedProx`)** with `int8` payload compression (`4x` communication reduction).
 
@@ -57,13 +57,13 @@ flowchart TD
     end
 
     subgraph DualPipeline["3. Parallel Feature & Tensor Extraction"]
-        TAB["21 Tabular Biosignal Features\n- BVP: Bandpass 0.5-8Hz, HR, RMSSD, SDNN, pNN50\n- EDA: Tonic/Phasic SCR Peaks & Amplitude\n- TEMP: Mean, SD, Linear Slope\n- ACC: Magnitude, Energy, Motion Fraction"]
+        TAB["26 Tabular & Autonomic Interaction Features\n- BVP: Bandpass 0.5-8Hz, HR, RMSSD, SDNN, pNN50\n- EDA: Tonic/Phasic SCR Peaks & Amplitude\n- Autonomic Ratios: Sympathovagal, EDA Arousal, Motion-Adj HR\n- Unsupervised Resting-Prefix Calibration"]
         TEN["6-Channel 32 Hz Tensor (1920 x 6)\n- BVP: Anti-Aliased Decimation (64->32 Hz)\n- EDA & TEMP: Linear Interp (4->32 Hz)\n- ACC_x, ACC_y, ACC_z: Native 32 Hz"]
     end
 
     subgraph EdgeModels["4. On-Device Strain Classifiers (LOSO)"]
         M0M1["M0 / M1 Classical & Tree Ensembles\nLogReg, DecisionTree, RandomForest, HistGB"]
-        M2["M2 Lightweight 1D-CNN\n8,833 Params | 41.4 KB (int8)\n0.999 ms p50 Inference Latency"]
+        M2["M2 Lightweight 1D-CNN (InstanceNorm + SE)\n12,161 Params | 51.2 KB (int8)\n1.806 ms p50 Inference Latency"]
         CAL["Platt Scaling Calibrator\n+ 3-of-5 Window Persistence Gate"]
     end
 
@@ -99,10 +99,10 @@ Every sliding window that touches or overlaps a protocol transition boundary (or
 
 | Cohort / Session | Subjects / Sessions | 60s Windows (30s Step) | Baseline Windows (`0`) | Elevated Strain Windows (`1`) | 30s Windows (15s Step) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **`PhysioNet_STRESS`** | 37 | **1,560** | 1,100 (70.5%) | 460 (29.5%) | **3,453** |
-| **`PhysioNet_AEROBIC`** | 31 | **317** | 225 (71.0%) | 92 (29.0%) | **904** |
-| **`PhysioNet_ANAEROBIC`** | 32 | **172** | 112 (65.1%) | 60 (34.9%) | **449** |
-| **Total Real Windows** | **100 Sessions** | **2,049** | **1,437 (70.1%)** | **612 (29.9%)** | **4,806** |
+| **`PhysioNet_STRESS`** | 37 | **2,319** | 1,934 (83.4%) | 385 (16.6%) | **5,084** |
+| **`PhysioNet_AEROBIC`** | 31 | **1,565** | 494 (31.6%) | 1,071 (68.4%) | **3,300** |
+| **`PhysioNet_ANAEROBIC`** | 32 | **908** | 399 (43.9%) | 509 (56.1%) | **1,950** |
+| **Total Real Windows** | **100 Sessions** | **4,792** | **2,827 (59.0%)** | **1,965 (41.0%)** | **10,334** |
 
 ---
 
@@ -175,18 +175,21 @@ Every evaluation in this repository enforces three non-negotiable anti-leakage r
 
 | Dataset Cohort | Model | Macro-F1 (Mean ± SD) | 95% Bootstrap CI | Worst-Subject F1 | Balanced Acc | ROC-AUC | ECE ↓ | Persisted False Alerts / hr ↓ |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`PhysioNet_STRESS`** | `m0_majority` | 0.3570 ± 0.1138 | [0.3181, 0.3940] | 0.2045 | 0.5000 | 0.5000 | 0.3965 | 0.00 |
-| **`PhysioNet_STRESS`** | `m0_logistic_regression` | 0.4475 ± 0.1117 | [0.4117, 0.4826] | 0.1860 | 0.5189 | 0.5167 | 0.2661 | 51.86 |
-| **`PhysioNet_STRESS`** | **`m1_decision_tree`** | **0.5440 ± 0.1401** | **[0.4975, 0.5884]** | 0.2969 | **0.5841** | 0.5971 | 0.2578 | 39.73 |
-| **`PhysioNet_STRESS`** | **`m1_random_forest`** | 0.5194 ± 0.1555 | [0.4716, 0.5720] | **0.2991** | 0.5735 | **0.6599** | **0.2213** | 34.30 |
-| **`PhysioNet_STRESS`** | **`m1_hist_gradient_boosting`** | 0.5289 ± 0.1540 | [0.4813, 0.5796] | 0.2595 | 0.5791 | 0.6500 | 0.2515 | **30.84** |
-| **`PhysioNet_STRESS`** | `m2_cnn_1d` (Raw 32Hz) | 0.4094 ± 0.1376 | [0.3641, 0.4505] | 0.1186 | 0.4780 | 0.5008 | 0.2965 | 55.83 |
-| **`PhysioNet_EXERCISE`** | **`m1_hist_gradient_boosting`** | **0.4515 ± 0.1297** | **[0.4095, 0.4975]** | **0.2500** | 0.4834 | 0.4759 | 0.3324 | 15.60 |
-| **`PhysioNet_EXERCISE`** | `m1_random_forest` | 0.4211 ± 0.1259 | [0.3770, 0.4650] | 0.1429 | 0.4486 | 0.4554 | 0.2218 | **14.45** |
-| **`Pooled (All 100 Sessions)`** | `m0_logistic_regression` | 0.4811 ± 0.1411 | [0.4383, 0.5253] | 0.2353 | 0.5353 | 0.5216 | 0.2663 | 49.62 |
-| **`Pooled (All 100 Sessions)`** | `m1_random_forest` | 0.5100 ± 0.1228 | [0.4690, 0.5499] | 0.2353 | 0.5514 | **0.6571** | **0.2197** | 40.42 |
-| **`Pooled (All 100 Sessions)`** | **`m1_hist_gradient_boosting`** | **0.5375 ± 0.1221** | **[0.4964, 0.5745]** | **0.3304** | **0.5729** | 0.6329 | 0.2453 | **33.44** |
-| **`Pooled (All 100 Sessions)`** | `m2_cnn_1d` (Raw 32Hz) | 0.4564 ± 0.1765 | [0.4011, 0.5137] | 0.1250 | 0.5361 | 0.5070 | 0.2689 | 65.74 |
+| **`PhysioNet_STRESS`** | `m0_majority` | 0.4359 ± 0.0403 | [0.4213, 0.4490] | 0.3469 | 0.5000 | 0.5000 | 0.2187 | 0.00 |
+| **`PhysioNet_STRESS`** | **`m0_logistic_regression`** | **0.6658 ± 0.1350** | **[0.6197, 0.7056]** | 0.3129 | **0.7414** | **0.8235** | 0.2455 | 25.94 |
+| **`PhysioNet_STRESS`** | `m1_decision_tree` | 0.5767 ± 0.1520 | [0.5302, 0.6298] | 0.1714 | 0.6413 | 0.6411 | 0.2817 | 30.54 |
+| **`PhysioNet_STRESS`** | **`m1_random_forest`** | 0.6544 ± 0.1693 | [0.6018, 0.7056] | 0.1714 | 0.6848 | 0.7884 | 0.2364 | 15.55 |
+| **`PhysioNet_STRESS`** | **`m1_hist_gradient_boosting`** | **0.6616 ± 0.1653** | **[0.6109, 0.7130]** | 0.1605 | 0.6985 | 0.7824 | 0.2009 | 13.91 |
+| **`PhysioNet_STRESS`** | `m2_cnn_1d` (Raw 32Hz) | 0.5263 ± 0.1031 | [0.4957, 0.5597] | **0.3469** | 0.5530 | 0.6465 | **0.1586** | **2.23** |
+| **`PhysioNet_EXERCISE`** | `m0_logistic_regression` | 0.8881 ± 0.0962 | [0.8549, 0.9191] | 0.5558 | 0.9131 | 0.9733 | 0.1003 | **13.66** |
+| **`PhysioNet_EXERCISE`** | `m1_decision_tree` | 0.8694 ± 0.1030 | [0.8293, 0.9043] | 0.5181 | 0.8941 | 0.9320 | 0.1072 | 16.99 |
+| **`PhysioNet_EXERCISE`** | **`m1_random_forest`** | 0.8926 ± 0.1050 | [0.8552, 0.9266] | 0.5558 | 0.9112 | 0.9726 | 0.1171 | 16.58 |
+| **`PhysioNet_EXERCISE`** | **`m1_hist_gradient_boosting`** | **0.8941 ± 0.0879** | **[0.8624, 0.9214]** | **0.6500** | **0.9145** | **0.9749** | **0.0873** | 16.21 |
+| **`PhysioNet_EXERCISE`** | `m2_cnn_1d` (Raw 32Hz) | 0.7109 ± 0.1475 | [0.6611, 0.7582] | 0.4273 | 0.7316 | 0.8366 | 0.1754 | 37.97 |
+| **`Pooled (All 100 Sessions)`** | `m0_logistic_regression` | 0.7853 ± 0.1206 | [0.7458, 0.8221] | 0.4266 | 0.8058 | 0.8836 | 0.1451 | 19.01 |
+| **`Pooled (All 100 Sessions)`** | `m1_random_forest` | 0.7855 ± 0.1270 | [0.7427, 0.8227] | 0.4305 | 0.8051 | 0.8814 | 0.1595 | 19.17 |
+| **`Pooled (All 100 Sessions)`** | **`m1_hist_gradient_boosting`** | **0.7869 ± 0.1239** | **[0.7445, 0.8248]** | **0.4533** | **0.8096** | **0.8951** | 0.1376 | **16.72** |
+| **`Pooled (All 100 Sessions)`** | **`m2_cnn_1d` (Raw 32Hz)** | **0.7172 ± 0.1263** | **[0.6790, 0.7589]** | 0.3926 | 0.7185 | 0.8128 | **0.1334** | 20.78 |
 
 ---
 
@@ -196,38 +199,39 @@ Every evaluation in this repository enforces three non-negotiable anti-leakage r
 
 | Ablation Dimension | Configuration | Model | Features / Channels | Macro-F1 (Mean ± SD) | 95% Bootstrap CI | Balanced Acc | ROC-AUC | ECE ↓ | Persisted False Alerts / hr ↓ |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Sensor Modality** | **`EDA_ONLY`** | `m1_random_forest` | 6 feats | **0.6359 ± 0.1778** | **[0.5629, 0.7232]** | **0.6590** | **0.7964** | **0.1595** | **8.14** |
-| **Sensor Modality** | **`BVP_EDA`** | `m1_random_forest` | 14 feats | **0.5997 ± 0.1721** | **[0.5273, 0.6801]** | 0.6265 | **0.7779** | 0.1689 | 9.60 |
-| **Sensor Modality** | `BVP_EDA_TEMP` | `m1_random_forest` | 17 feats | 0.5677 ± 0.1646 | [0.5006, 0.6472] | 0.6000 | 0.7464 | 0.1596 | 9.09 |
-| **Sensor Modality** | `BVP_ONLY` | `m1_random_forest` | 8 feats | 0.5548 ± 0.1695 | [0.4771, 0.6287] | 0.6459 | 0.6962 | 0.2633 | 23.69 |
-| **Sensor Modality** | `ALL_SENSORS` (w/ ACC) | `m1_random_forest` | 21 feats | 0.5354 ± 0.1359 | [0.4778, 0.5988] | 0.5487 | 0.7506 | 0.1765 | 6.65 |
-| **Sensor Modality** | `TEMP_ACC_ONLY` | `m1_random_forest` | 7 feats | 0.4775 ± 0.0708 | [0.4497, 0.5107] | 0.5037 | 0.4851 | 0.1939 | 5.33 |
-| **Window Duration** | `60s_window_30s_step` | `m1_random_forest` | 21 feats | 0.5354 ± 0.1359 | [0.4778, 0.5988] | 0.5487 | **0.7506** | **0.1765** | **6.65** |
-| **Window Duration** | **`30s_window_15s_step`** | `m1_random_forest` | 21 feats | **0.5634 ± 0.1537** | **[0.4983, 0.6379]** | **0.5910** | 0.7210 | 0.1909 | 11.15 |
-| **Window Duration** | `60s_window_30s_step` | `m2_cnn_1d` | 6 ch | 0.4000 ± 0.2164 | [0.2859, 0.5022] | 0.6153 | 0.6420 | 0.3707 | 58.07 |
-| **Window Duration** | **`30s_window_15s_step`** | `m2_cnn_1d` | 6 ch | **0.4484 ± 0.2133** | **[0.3479, 0.5460]** | 0.6001 | **0.6689** | **0.3381** | 56.42 |
-| **Normalization** | `GlobalZScore_TrainFoldOnly` | `m0_logistic_regression` | 21 feats | 0.5402 ± 0.1737 | [0.4640, 0.6225] | 0.6202 | 0.7085 | 0.3094 | 27.02 |
-| **Normalization** | **`PerSubjectBaselineCalibrated`** | `m0_logistic_regression` | 21 feats | **0.6656 ± 0.1679** | **[0.5925, 0.7467]** | **0.7276** | **0.7799** | **0.1982** | **9.69** |
+| **Sensor Modality** | **`ALL_SENSORS`** | `m1_random_forest` | 21 feats | **0.6347 ± 0.1371** | **[0.5756, 0.6956]** | 0.6326 | **0.7825** | **0.1809** | **4.32** |
+| **Sensor Modality** | **`BVP_EDA`** | `m1_random_forest` | 14 feats | **0.6340 ± 0.1552** | **[0.5660, 0.7039]** | 0.6514 | 0.7777 | 0.1875 | 6.66 |
+| **Sensor Modality** | `BVP_EDA_TEMP` | `m1_random_forest` | 17 feats | 0.6284 ± 0.1553 | [0.5612, 0.6947] | 0.6366 | 0.7757 | 0.1839 | 5.57 |
+| **Sensor Modality** | `EDA_ONLY` | `m1_random_forest` | 6 feats | 0.6147 ± 0.1499 | [0.5518, 0.6830] | **0.6776** | 0.7624 | 0.1990 | 15.12 |
+| **Sensor Modality** | `BVP_ONLY` | `m1_random_forest` | 8 feats | 0.5638 ± 0.1699 | [0.4887, 0.6379] | 0.6362 | 0.6402 | 0.2730 | 21.48 |
+| **Sensor Modality** | `TEMP_ACC_ONLY` | `m1_random_forest` | 7 feats | 0.5222 ± 0.1165 | [0.4724, 0.5844] | 0.5566 | 0.6381 | 0.2821 | 24.33 |
+| **Window Duration** | **`60s_window_30s_step`** | `m1_random_forest` | 21 feats | **0.6347 ± 0.1371** | **[0.5756, 0.6956]** | 0.6326 | **0.7825** | **0.1809** | **4.32** |
+| **Window Duration** | `30s_window_15s_step` | `m1_random_forest` | 21 feats | 0.6181 ± 0.1170 | [0.5664, 0.6727] | **0.6496** | 0.7517 | 0.2284 | 12.24 |
+| **Window Duration** | `60s_window_30s_step` | `m2_cnn_1d` | 6 ch | 0.4726 ± 0.0094 | [0.4679, 0.4765] | 0.4992 | 0.4877 | 0.1201 | **0.00** |
+| **Window Duration** | **`30s_window_15s_step`** | `m2_cnn_1d` | 6 ch | **0.4935 ± 0.0533** | **[0.4718, 0.5236]** | **0.5144** | **0.6078** | **0.1082** | 0.89 |
+| **Normalization** | `GlobalZScore_TrainFoldOnly` | `m0_logistic_regression` | 21 feats | 0.5163 ± 0.1774 | [0.4409, 0.6024] | 0.5971 | 0.6311 | 0.3284 | 28.18 |
+| **Normalization** | **`UnsupervisedRestingPrefixCalibrated`** | `m0_logistic_regression` | 21 feats | **0.6089 ± 0.1252** | **[0.5563, 0.6659]** | **0.7162** | **0.8011** | 0.2542 | 23.12 |
+| **Normalization** | **`PerSubjectBaselineCalibrated`** | `m0_logistic_regression` | 21 feats | **0.6339 ± 0.1201** | **[0.5860, 0.6863]** | 0.7071 | 0.7640 | **0.2052** | **14.71** |
 
 #### Key Scientific Findings from Phase 1 Ablations:
-1. **Electrodermal & Cardiovascular Synergy (`EDA_ONLY` and `BVP_EDA`):** On cognitive/psychological stress (`PhysioNet_STRESS`), `EDA_ONLY` (`ROC-AUC = 0.7964`, `Macro-F1 = 0.6359`) and `BVP_EDA` (`ROC-AUC = 0.7779`, `Macro-F1 = 0.5997`) substantially outperform `ALL_SENSORS` (`Macro-F1 = 0.5354`). Including uncalibrated wrist accelerometer features directly in the classifier degrades cross-subject generalization during seated cognitive stress — motivating our **Phase 2 architecture**, where wrist motion is used as a **contextual gate** rather than a raw classification feature.
-2. **Inter-Subject Baseline Drift (`GlobalZScore` vs. `PerSubjectBaseline`):** Standardizing each subject's features by their own resting baseline (`PerSubjectBaselineCalibrated`) improves `Macro-F1` by **+12.54 percentage points** (`0.5402 -> 0.6656`) and cuts persisted false alerts by **64%** (`27.02/hr -> 9.69/hr`), demonstrating that resting baseline calibration is the single most impactful factor in subject-independent wearable strain detection.
-3. **Sample Density vs. Frequency Resolution (`30s` vs. `60s` Windows):** Shorter `30s` windows (`15s` step) more than double training window count (`2,049 -> 4,806`), improving `M2` 1D-CNN `Macro-F1` from `0.4000` to `0.4484` (`ROC-AUC = 0.6689`) and `M1` Random Forest `Macro-F1` from `0.5354` to `0.5634`.
+1. **Multi-Sensor & Autonomic Interaction Synergy (`ALL_SENSORS` and `BVP_EDA`):** Combining BVP, EDA, TEMP, and ACC with autonomic interaction features (`sympathovagal_ratio`, `eda_arousal_index`, `motion_adjusted_hr`) enables `ALL_SENSORS` (`Macro-F1 = 0.6347`, `ROC-AUC = 0.7825`, **`4.32` false alerts/hr**) and `BVP_EDA` (`Macro-F1 = 0.6340`, `ROC-AUC = 0.7777`) to dramatically outperform single-sensor baselines (`BVP_ONLY` `0.5638`, `TEMP_ACC_ONLY` `0.5222`).
+2. **Label-Free Resting-Prefix Calibration (`UnsupervisedRestingPrefixCalibrated`):** Standardizing each subject's session using their initial resting prefix (`UnsupervisedSubjectSessionCalibrator`, using **zero ground-truth labels**) boosts `Macro-F1` by **+9.26 percentage points** (`0.5163 -> 0.6089`) and jumps `ROC-AUC` from **`0.6311` to `0.8011`** (`+17.0` AUC points), nearly matching oracle `PerSubjectBaselineCalibrated` (`0.6339`) without requiring ground-truth test labels.
+3. **Sample Density vs. Frequency Resolution (`30s` vs. `60s` Windows):** While `60s` windows provide cleaner HRV frequency stability for tree ensembles (`Macro-F1 = 0.6347`, `4.32` false alerts/hr), shorter `30s` windows (`10,334` windows total) double the training sample density for the deep `M2` 1D-CNN, improving its `ROC-AUC` from `0.4877` to `0.6078`.
 
 ---
 
 ## 7. Edge Hardware Footprint, Int8 Quantization & Latency Profile
 
-The `M2` 1D-CNN (`src/models/cnn_1d.py`) uses 3 depth-strided 1D convolutional blocks (`6 -> 16 -> 32 -> 48` filters) followed by Global Average Pooling (`AdaptiveAvgPool1d(1)`) to stay strictly below the **50,000 parameter edge budget**:
+The `M2` 1D-CNN (`src/models/cnn_1d.py`) uses per-window `InstanceNorm1d`, 3 depth-strided 1D convolutional blocks (`6 -> 16 -> 32 -> 48` filters) with Squeeze-and-Excitation (`SEBlock1D`) channel attention, and dual Global Average + Max Pooling (`AdaptiveAvgPool1d(1) + AdaptiveMaxPool1d(1)`) to stay strictly below the **50,000 parameter edge budget**:
 
 | Metric (`results/tables/edge_profile_m2.csv`) | Value | Edge Target Requirement | Status |
 | :--- | :---: | :---: | :---: |
-| **Trainable Parameters** | **8,833** | $< 50,000$ | **Pass (17.7% of ceiling)** |
-| **Float32 Serialized Size** | **42.34 KB** | $< 200\text{ KB}$ | **Pass** |
-| **Dynamic Int8 Quantized Size** | **41.40 KB** | $< 100\text{ KB}$ | **Pass** |
-| **Quantization Accuracy Delta (`Int8 - Float32`)** | **0.0000** (`70.51%` vs `70.51%`) | $|\Delta \text{Acc}| < 1.0\%$ | **Pass (Zero Loss)** |
-| **Single-Window Inference Latency (`Mean / p50`)** | **1.018 ms / 0.999 ms** | $< 50\text{ ms}$ | **Pass (~50x faster)** |
-| **Single-Window Tail Latency (`p95 / p99`)** | **1.160 ms / 1.215 ms** | $< 100\text{ ms}$ | **Pass** |
+| **Trainable Parameters** | **12,161** | $< 50,000$ | **Pass (24.3% of ceiling)** |
+| **Float32 Serialized Size** | **58.69 KB** | $< 200\text{ KB}$ | **Pass** |
+| **Dynamic Int8 Quantized Size** | **51.22 KB** | $< 100\text{ KB}$ | **Pass** |
+| **Quantization Accuracy Delta (`Int8 - Float32`)** | **0.0000** (`83.40%` vs `83.40%`) | $|\Delta \text{Acc}| < 1.0\%$ | **Pass (Zero Loss)** |
+| **Single-Window Inference Latency (`Mean / p50`)** | **1.826 ms / 1.806 ms** | $< 50\text{ ms}$ | **Pass (~27x faster)** |
+| **Single-Window Tail Latency (`p95 / p99`)** | **1.995 ms / 2.192 ms** | $< 100\text{ ms}$ | **Pass** |
 
 ---
 
@@ -294,12 +298,12 @@ $$w^{(t+1)} = \sum_{k \in S_t} \frac{n_k}{\sum_{j \in S_t} n_j} w_k^{(t+1)}, \qq
 
 | Training Paradigm (`results/tables/phase3_federated_benchmark.csv`) | Rounds ($R$) × Local Epochs ($E$) | Client Participation ($C$) | Macro-F1 (Mean ± SD) | ROC-AUC | Persisted False Alerts / hr ↓ | Float32 Traffic (KB) | Int8 Quantized Traffic (KB) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`Centralized_LOSO_M2`** *(Upper Bound)* | $1 \times 8$ | 100% (Pooled Server) | **0.4311 ± 0.1743** | **0.5670** | 63.14 | 0.0 KB *(Raw Data Shared)* | 0.0 KB *(Raw Data Shared)* |
-| **`FedAvg_FullParticipation`** ($\mu=0.0$) | $4 \times 2$ | 100% (`36` clients/rd) | 0.3455 ± 0.1488 | 0.5563 | 26.53 | 9,661.09 KB | **2,415.27 KB** |
-| **`FedProx_mu0.05`** ($\mu=0.05$) | $4 \times 2$ | 100% (`36` clients/rd) | 0.3441 ± 0.1508 | 0.5552 | 26.59 | 9,661.09 KB | **2,415.27 KB** |
-| **`FedAvg_PartialClients_0.6`** ($\mu=0.0$) | $4 \times 2$ | 60% (`22` clients/rd) | **0.3714 ± 0.1747** | 0.5422 | **25.04** | 5,796.66 KB | **1,449.16 KB** |
+| **`Centralized_LOSO_M2`** *(Upper Bound)* | $1 \times 6$ | 100% (Pooled Server) | **0.4914 ± 0.1017** | **0.6432** | **1.30** | 0.0 KB *(Raw Data Shared)* | 0.0 KB *(Raw Data Shared)* |
+| **`FedAvg_FullParticipation`** ($\mu=0.0$) | $3 \times 2$ | 100% (`11` clients/rd) | 0.4361 ± 0.0836 | 0.4706 | 23.66 | 3,135.26 KB | **783.81 KB** |
+| **`FedProx_mu0.05`** ($\mu=0.05$) | $3 \times 2$ | 100% (`11` clients/rd) | 0.4300 ± 0.0819 | 0.4645 | **22.98** | 3,135.26 KB | **783.81 KB** |
+| **`FedAvg_PartialClients_0.6`** ($\mu=0.0$) | $3 \times 2$ | 60% (`7` clients/rd) | **0.4714 ± 0.1045** | **0.5038** | 45.83 | 1,995.16 KB | **498.79 KB** |
 
-* **Privacy & Bandwidth Efficiency:** Federated training achieves `ROC-AUC = 0.5563` (within `0.011` of centralized training) while keeping 100% of raw physiological waveforms on-device and reducing false alerts per hour from `63.14/hr` to `25.04/hr`. Dynamic `int8` weight quantization compresses total multi-round network traffic by **4×** (`9.66 MB -> 2.42 MB` across all 36 training clients, or just **~16.8 KB per subject per round**).
+* **Privacy & Bandwidth Efficiency:** Federated training with partial client sampling (`FedAvg_PartialClients_0.6`) achieves **`Macro-F1 = 0.4714`** (within `0.020` of centralized `M2` LOSO at `0.4914`) while keeping 100% of raw physiological waveforms on-device. Dynamic `int8` weight quantization compresses total multi-round network traffic by **4×** (`1.99 MB -> 498.8 KB` across all rounds).
 
 ---
 
@@ -311,12 +315,12 @@ $$w^{(t+1)} = \sum_{k \in S_t} \frac{n_k}{\sum_{j \in S_t} n_j} w_k^{(t+1)}, \qq
 ├── data/
 │   ├── raw/physionet_wearable/1.0.1/    # Raw Empatica E4 CSVs (STRESS, AEROBIC, ANAEROBIC)
 │   ├── labels/
-│   │   ├── segment_labels.csv           # 2,049 validated 60s window boundaries & binary labels
+│   │   ├── segment_labels.csv           # 4,792 validated 60s window boundaries & binary labels
 │   │   ├── real_physionet_features_60s.csv # Extracted 21-feature tabular dataset (60s/30s stride)
 │   │   └── real_physionet_features_30s.csv # Extracted 21-feature tabular dataset (30s/15s stride)
 │   └── cache/
-│       ├── real_physionet_tensors_60s.npz  # 32 Hz 6-channel CNN tensors (2049, 6, 1920)
-│       └── real_physionet_tensors_30s.npz  # 32 Hz 6-channel CNN tensors (4806, 6, 960)
+│       ├── real_physionet_tensors_60s.npz  # 32 Hz 6-channel CNN tensors (4792, 6, 1920)
+│       └── real_physionet_tensors_30s.npz  # 32 Hz 6-channel CNN tensors (10334, 6, 960)
 ├── docs/
 │   └── assumptions.md                   # Mandatory research proxy disclosures & harmonization rules
 ├── Literature Review/                   # Reference papers on TinyML, edge biosignals & federated AI

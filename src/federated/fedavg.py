@@ -94,7 +94,7 @@ def train_local_edge_client(
     y_local = client_data.y.to(device)
     num_pos = torch.sum(y_local == 1.0).item()
     num_neg = torch.sum(y_local == 0.0).item()
-    pos_weight_val = max(1.0, num_neg / max(1.0, num_pos))
+    pos_weight_val = float(np.clip(np.sqrt(num_neg / max(1.0, num_pos)), 0.65, 2.2))
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight_val], device=device))
 
     optimizer = optim.Adam(local_model.parameters(), lr=lr, weight_decay=1e-4)
@@ -214,3 +214,4 @@ def run_federated_training(
         })
 
     return global_model, round_logs
+
