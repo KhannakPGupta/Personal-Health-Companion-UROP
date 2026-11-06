@@ -1,0 +1,5 @@
+dataset,algorithm,rounds,local_epochs,client_fraction,fedprox_mu,macro_f1_mean,macro_f1_std,macro_f1_worst,strain_f1_mean,balanced_acc_mean,roc_auc_mean,ece_mean,false_alerts_persisted_mean,total_comm_float32_kb,total_comm_int8_kb,macro_f1_95ci_lower,macro_f1_95ci_upper
+WESAD,Centralized_LOSO_M2,1,8,1.0,0.0,1.0,0.0,1.0,1.0,1.0,1.0,0.3458,0.0,0.0,0.0,1.0,1.0
+WESAD,FedAvg_FullParticipation,4,2,1.0,0.0,1.0,0.0,1.0,1.0,1.0,1.0,0.4569,0.0,1380.16,345.04,1.0,1.0
+WESAD,FedProx_mu0.05,4,2,1.0,0.05,1.0,0.0,1.0,1.0,1.0,1.0,0.4569,0.0,1380.16,345.04,1.0,1.0
+WESAD,FedAvg_PartialClients_0.6,4,2,0.6,0.0,1.0,0.0,1.0,1.0,1.0,1.0,0.4572,0.0,828.09,207.02,1.0,1.0
