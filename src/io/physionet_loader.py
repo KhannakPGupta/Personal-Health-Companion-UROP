@@ -60,10 +60,19 @@ def parse_data_constraints(constraints_file: Path) -> Set[Tuple[str, str]]:
     return excluded
 
 
+def _parse_timestamp_sec(raw_val: object) -> float:
+    """Parse either a numeric Unix timestamp or an ISO datetime string into epoch seconds."""
+    s = str(raw_val).strip()
+    try:
+        return float(s)
+    except ValueError:
+        return float(pd.to_datetime(s, utc=True).timestamp())
+
+
 def read_e4_csv(csv_path: Path) -> E4TimeSeries:
     """Read an Empatica E4 CSV file.
     
-    Row 0: Start timestamp (UTC epoch seconds).
+    Row 0: Start timestamp (UTC epoch seconds or ISO datetime string).
     Row 1: Sample frequency in Hz.
     Rows 2+: Sensor values.
     
@@ -77,7 +86,7 @@ def read_e4_csv(csv_path: Path) -> E4TimeSeries:
         first_line = f.readline().strip()
         second_line = f.readline().strip()
 
-    start_time = float(first_line.split(",")[0])
+    start_time = _parse_timestamp_sec(first_line.split(",")[0])
     sample_rate = float(second_line.split(",")[0])
 
     # Load sensor samples skipping header rows
@@ -117,7 +126,8 @@ def load_physionet_session(
 
     tags_path = session_dir / "tags.csv"
     if tags_path.exists() and tags_path.stat().st_size > 0:
-        tags = pd.read_csv(tags_path, header=None).values.flatten().astype(np.float64)
+        raw_tags = pd.read_csv(tags_path, header=None).values.flatten()
+        tags = np.array([_parse_timestamp_sec(t) for t in raw_tags if pd.notna(t) and str(t).strip() != ""], dtype=np.float64)
     else:
         tags = np.array([], dtype=np.float64)
 

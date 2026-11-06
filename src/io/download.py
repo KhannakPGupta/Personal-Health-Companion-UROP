@@ -18,6 +18,10 @@ import zipfile
 WESAD_PRIMARY_URL = "https://uni-siegen.sciebo.de/s/HGdUkoNlW1Ub04n/download"
 WESAD_FALLBACK_URL = "https://archive.ics.uci.edu/static/public/465/wesad+wearable+stress+and+affect+detection.zip"
 PHYSIONET_BASE_URL = "https://physionet.org/files/wearable-device-dataset/1.0.1/"
+PHYSIONET_ZIP_URL = (
+    "https://physionet.org/static/published-projects/wearable-device-dataset/"
+    "wearable-device-dataset-from-induced-stress-and-structured-exercise-sessions-1.0.1.zip"
+)
 
 
 def download_file(url: str, destination: Path, chunk_size: int = 1024 * 1024) -> Path:
@@ -105,6 +109,35 @@ def fetch_wesad(target_dir: Path, archive_cache: Path | None = None) -> None:
     extract_zip(zip_dest, target_dir)
 
 
+def fetch_physionet(target_dir: Path, archive_cache: Path | None = None) -> None:
+    """Fetch PhysioNet Wearable Device Dataset v1.0.1 ZIP and unpack into target_dir."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    zip_dest = archive_cache or (target_dir.parent / "physionet_wearable_1.0.1.zip")
+
+    if not zip_dest.exists():
+        download_file(PHYSIONET_ZIP_URL, zip_dest)
+
+    temp_extract = target_dir.parent / "_physionet_extract_tmp"
+    if temp_extract.exists():
+        shutil.rmtree(temp_extract)
+    extract_zip(zip_dest, temp_extract)
+
+    # Locate the inner folder that contains STRESS / AEROBIC / ANAEROBIC / data_constraints.txt
+    inner_dirs = [d for d in temp_extract.rglob("STRESS") if d.is_dir()]
+    if inner_dirs:
+        source_root = inner_dirs[0].parent
+        for item in source_root.iterdir():
+            dest_item = target_dir / item.name
+            if dest_item.exists():
+                if dest_item.is_dir():
+                    shutil.rmtree(dest_item)
+                else:
+                    dest_item.unlink()
+            shutil.move(str(item), str(dest_item))
+    shutil.rmtree(temp_extract, ignore_errors=True)
+    print(f"[*] PhysioNet v1.0.1 ready at {target_dir}")
+
+
 def main() -> None:
     """Command-line interface for downloading research datasets."""
     parser = argparse.ArgumentParser(description="Download WESAD and PhysioNet Wearable datasets.")
@@ -130,11 +163,9 @@ def main() -> None:
         fetch_wesad(wesad_dir)
 
     if args.dataset in ("physionet", "all"):
-        print("\n=== PhysioNet Wearable Device Dataset ===")
-        print(f"PhysioNet v1.0.1 can be synced directly via:")
-        print(f"  wget -r -N -c -np {PHYSIONET_BASE_URL} -P {args.data_dir / 'physionet_wearable'}")
-        print(f"Or using AWS CLI:")
-        print(f"  aws s3 sync --no-sign-request s3://physionet-open/wearable-device-dataset/1.0.1/ {args.data_dir / 'physionet_wearable' / '1.0.1'}")
+        print("\n=== Fetching PhysioNet Wearable Device Dataset v1.0.1 ===")
+        physio_dir = args.data_dir / "physionet_wearable" / "1.0.1"
+        fetch_physionet(physio_dir)
 
 
 if __name__ == "__main__":

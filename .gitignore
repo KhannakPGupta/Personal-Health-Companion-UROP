@@ -220,10 +220,9 @@ __marimo__/
 .streamlit/secrets.toml
 
 # ----------------------------------------------------
-# Research & ML Project Specific (Never commit raw data)
+# Research & ML Project Specific (Track PhysioNet CSVs & extracted features/tensors)
 # ----------------------------------------------------
-data/raw/
-data/cache/
+data/raw/WESAD.zip
 *.parquet
 *.pkl
 *.pickle
@@ -237,7 +236,9 @@ models/*.tflite
 models/*.pt
 checkpoints/
 
-# Keep label metadata & small table exports
+# Keep dataset CSVs, label metadata, cached tensors & table exports
+!data/raw/physionet_wearable/
+!data/cache/
 !data/labels/
 !data/labels/.gitkeep
 !results/tables/
