@@ -69,6 +69,18 @@ python src/io/download.py --dataset wesad
 aws s3 sync --no-sign-request s3://physionet-open/wearable-device-dataset/1.0.1/ data/raw/physionet_wearable/1.0.1
 # Or via wget:
 wget -r -N -c -np https://physionet.org/files/wearable-device-dataset/1.0.1/ -P data/raw/physionet_wearable/
+
+# 5. Run Phase 1D LOSO E1 Benchmark & Edge Quantization Profile
+python src/eval/run_phase1_experiments.py
+
+# 6. Run Phase 1E Cross-Dataset Transfer (E2) & Sensor/Window Ablations (E3)
+python src/eval/ablations.py
+
+# 7. Run Phase 2 CPCB Ambient AQI Hazard Model & Contextual Risk Fusion Engine
+python src/fusion/contextual_fusion.py
+
+# 8. Run Phase 3 Federated Edge Simulation (FedAvg & FedProx vs Centralized LOSO)
+python src/federated/federated_evaluator.py
 ```
 
 ---
@@ -79,6 +91,6 @@ wget -r -N -c -np https://physionet.org/files/wearable-device-dataset/1.0.1/ -P 
 - **Phase 1B**: Unified segment labeling & Checkpoint 1 sign-off (`data/labels/segment_labels.csv`) *(Completed)*.
 - **Phase 1C**: Signal preprocessing, quality gating, normalizers & 32 Hz CNN tensor pipelines *(Completed)*.
 - **Phase 1D**: Baseline models (M0, M1), edge 1D-CNN (M2 < 50k params), int8 quantizer, and LOSO evaluation engine *(Completed)*.
-- **Phase 1E**: Cross-dataset transfer & sensor ablations.
-- **Phase 2**: Ambient AQI model & contextual fusion demo *(Pending approval)*.
-- **Phase 3**: Federated edge simulation *(Pending approval)*.
+- **Phase 1E**: Cross-dataset transfer (`WESAD <-> PhysioNet`) & sensor/window/normalization ablations *(Completed)*.
+- **Phase 2**: CPCB Ambient AQI hazard model & motion-gated contextual fusion engine *(Completed)*.
+- **Phase 3**: Subject-isolated Federated Edge Learning simulation (`FedAvg` & `FedProx`) *(Completed)*.

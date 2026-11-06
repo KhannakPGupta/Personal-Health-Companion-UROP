@@ -71,3 +71,16 @@ evaluation:
   bootstrap_iterations: 1000
   confidence_interval: 0.95
   persistence_rule: "3_of_5"
+
+phase2_fusion:
+  cpcb_hazard_aqi_threshold: 200.0 # Poor / Very Poor / Severe
+  motion_exertion_threshold: 0.35
+  physio_weight: 0.60
+  env_weight: 0.40
+
+phase3_federated:
+  algorithms: ["FedAvg", "FedProx"]
+  communication_rounds: 6
+  local_epochs: 2
+  client_fraction: 1.0
+  fedprox_mu: 0.05
