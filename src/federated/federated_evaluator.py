@@ -147,9 +147,21 @@ def main() -> None:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    df_wesad, ten_wesad = generate_synthetic_cohort(
-        "WESAD", [f"S{i}" for i in [2, 3, 4, 5, 6, 7]], windows_per_subject=16, seq_len=512, seed=42
-    )
+    feat_60_path = Path("data/labels/real_physionet_features_60s.csv")
+    ten_60_path = Path("data/cache/real_physionet_tensors_60s.npz")
+    if feat_60_path.exists() and ten_60_path.exists():
+        df_all = pd.read_csv(feat_60_path)
+        ten_all = np.load(ten_60_path)["tensors"]
+        mask = (df_all["session"] == "STRESS").values
+        df_wesad = df_all[mask].reset_index(drop=True)
+        ten_wesad = ten_all[mask]
+        ds_name = "PhysioNet_STRESS"
+    else:
+        df_wesad, ten_wesad = generate_synthetic_cohort(
+            "WESAD", [f"S{i}" for i in [2, 3, 4, 5, 6, 7]], windows_per_subject=16, seq_len=512, seed=42
+        )
+        ds_name = "WESAD"
+
     labels = df_wesad["label"].values
     subjects = df_wesad["subject_id"].values
 
@@ -160,12 +172,12 @@ def main() -> None:
         tensors=ten_wesad,
         labels=labels,
         subject_ids=subjects,
-        dataset_name="WESAD",
+        dataset_name=ds_name,
         epochs=args.rounds * args.local_epochs,
     )
     if cent_sum:
         rows.append({
-            "dataset": "WESAD",
+            "dataset": ds_name,
             "algorithm": "Centralized_LOSO_M2",
             "rounds": 1,
             "local_epochs": args.rounds * args.local_epochs,
@@ -190,7 +202,7 @@ def main() -> None:
         tensors=ten_wesad,
         labels=labels,
         subject_ids=subjects,
-        dataset_name="WESAD",
+        dataset_name=ds_name,
         algorithm_name="FedAvg_FullParticipation",
         rounds=args.rounds,
         local_epochs=args.local_epochs,
@@ -205,7 +217,7 @@ def main() -> None:
         tensors=ten_wesad,
         labels=labels,
         subject_ids=subjects,
-        dataset_name="WESAD",
+        dataset_name=ds_name,
         algorithm_name="FedProx_mu0.05",
         rounds=args.rounds,
         local_epochs=args.local_epochs,
@@ -220,7 +232,7 @@ def main() -> None:
         tensors=ten_wesad,
         labels=labels,
         subject_ids=subjects,
-        dataset_name="WESAD",
+        dataset_name=ds_name,
         algorithm_name="FedAvg_PartialClients_0.6",
         rounds=args.rounds,
         local_epochs=args.local_epochs,
@@ -238,3 +250,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

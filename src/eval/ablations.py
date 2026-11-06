@@ -268,26 +268,56 @@ def main() -> None:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    wesad_60, wesad_ten_60 = generate_synthetic_cohort(
-        "WESAD", [f"S{i}" for i in [2, 3, 4, 5, 6, 7]], windows_per_subject=16, seq_len=1920, seed=42
-    )
-    physio_60, physio_ten_60 = generate_synthetic_cohort(
-        "PhysioNet", [f"P{i:02d}" for i in range(1, 7)], windows_per_subject=16, seq_len=1920, seed=101
-    )
-    wesad_30, wesad_ten_30 = generate_synthetic_cohort(
-        "WESAD", [f"S{i}" for i in [2, 3, 4, 5, 6, 7]], windows_per_subject=32, seq_len=960, seed=202
-    )
+    feat_60_path = Path("data/labels/real_physionet_features_60s.csv")
+    ten_60_path = Path("data/cache/real_physionet_tensors_60s.npz")
+    feat_30_path = Path("data/labels/real_physionet_features_30s.csv")
+    ten_30_path = Path("data/cache/real_physionet_tensors_30s.npz")
 
-    # 1. Cross-Dataset Generalization (Evaluation E2)
+    if feat_60_path.exists() and ten_60_path.exists() and feat_30_path.exists() and ten_30_path.exists():
+        df_all_60 = pd.read_csv(feat_60_path)
+        ten_all_60 = np.load(ten_60_path)["tensors"]
+        df_all_30 = pd.read_csv(feat_30_path)
+        ten_all_30 = np.load(ten_30_path)["tensors"]
+
+        # Disjoint subject + protocol cohorts for zero-leakage Cross-Protocol Transfer (E2):
+        # Cohort A: STRESS protocol, subjects 'f*'
+        # Cohort B: EXERCISE protocol (AEROBIC/ANAEROBIC), subjects 'S*'
+        mask_src = ((df_all_60["session"] == "STRESS") & (df_all_60["subject_id"].str.startswith("f"))).values
+        mask_tgt = ((df_all_60["session"].isin(["AEROBIC", "ANAEROBIC"])) & (df_all_60["subject_id"].str.startswith("S"))).values
+
+        wesad_60 = df_all_60[mask_src].reset_index(drop=True)
+        wesad_ten_60 = ten_all_60[mask_src]
+        physio_60 = df_all_60[mask_tgt].reset_index(drop=True)
+        physio_ten_60 = ten_all_60[mask_tgt]
+
+        mask_src_30 = ((df_all_30["session"] == "STRESS") & (df_all_30["subject_id"].str.startswith("f"))).values
+        wesad_30 = df_all_30[mask_src_30].reset_index(drop=True)
+        wesad_ten_30 = ten_all_30[mask_src_30]
+        src_label = "PhysioNet_STRESS"
+        tgt_label = "PhysioNet_EXERCISE"
+    else:
+        wesad_60, wesad_ten_60 = generate_synthetic_cohort(
+            "WESAD", [f"S{i}" for i in [2, 3, 4, 5, 6, 7]], windows_per_subject=16, seq_len=1920, seed=42
+        )
+        physio_60, physio_ten_60 = generate_synthetic_cohort(
+            "PhysioNet", [f"P{i:02d}" for i in range(1, 7)], windows_per_subject=16, seq_len=1920, seed=101
+        )
+        wesad_30, wesad_ten_30 = generate_synthetic_cohort(
+            "WESAD", [f"S{i}" for i in [2, 3, 4, 5, 6, 7]], windows_per_subject=32, seq_len=960, seed=202
+        )
+        src_label = "WESAD"
+        tgt_label = "PhysioNet"
+
+    # 1. Cross-Dataset / Cross-Protocol Generalization (Evaluation E2)
     transfer_rows = []
     for m_name in ["m0_logistic_regression", "m1_decision_tree", "m1_random_forest", "m1_hist_gradient_boosting"]:
         _, sum_w2p = run_cross_dataset_tabular_transfer(
-            wesad_60, physio_60, m_name, TABULAR_FEATURE_COLS, "WESAD", "PhysioNet", calibrate_on_source_val=True
+            wesad_60, physio_60, m_name, TABULAR_FEATURE_COLS, src_label, tgt_label, calibrate_on_source_val=True
         )
         if sum_w2p:
             transfer_rows.append(sum_w2p)
         _, sum_p2w = run_cross_dataset_tabular_transfer(
-            physio_60, wesad_60, m_name, TABULAR_FEATURE_COLS, "PhysioNet", "WESAD", calibrate_on_source_val=True
+            physio_60, wesad_60, m_name, TABULAR_FEATURE_COLS, tgt_label, src_label, calibrate_on_source_val=True
         )
         if sum_p2w:
             transfer_rows.append(sum_p2w)
@@ -295,7 +325,7 @@ def main() -> None:
     _, cnn_w2p = run_cross_dataset_cnn_transfer(
         wesad_ten_60, wesad_60["label"].values, wesad_60["subject_id"].values,
         physio_ten_60, physio_60["label"].values, physio_60["subject_id"].values,
-        source_name="WESAD", target_name="PhysioNet", epochs=args.cnn_epochs,
+        source_name=src_label, target_name=tgt_label, epochs=args.cnn_epochs,
     )
     if cnn_w2p:
         transfer_rows.append(cnn_w2p)
@@ -303,7 +333,7 @@ def main() -> None:
     _, cnn_p2w = run_cross_dataset_cnn_transfer(
         physio_ten_60, physio_60["label"].values, physio_60["subject_id"].values,
         wesad_ten_60, wesad_60["label"].values, wesad_60["subject_id"].values,
-        source_name="PhysioNet", target_name="WESAD", epochs=args.cnn_epochs,
+        source_name=tgt_label, target_name=src_label, epochs=args.cnn_epochs,
     )
     if cnn_p2w:
         transfer_rows.append(cnn_p2w)
@@ -313,12 +343,12 @@ def main() -> None:
     df_transfer.to_csv(transfer_csv, index=False)
 
     # 2. Sensor, Window, Normalization & Label Sensitivity Ablations (Evaluation E3)
-    df_sensor = run_sensor_modality_ablation(wesad_60, wesad_ten_60, dataset_name="WESAD", cnn_epochs=args.cnn_epochs)
+    df_sensor = run_sensor_modality_ablation(wesad_60, wesad_ten_60, dataset_name=src_label, cnn_epochs=args.cnn_epochs)
     df_window = run_window_length_ablation(
-        wesad_60, wesad_ten_60, wesad_30, wesad_ten_30, dataset_name="WESAD", cnn_epochs=args.cnn_epochs
+        wesad_60, wesad_ten_60, wesad_30, wesad_ten_30, dataset_name=src_label, cnn_epochs=args.cnn_epochs
     )
-    df_norm = run_normalization_ablation(wesad_60, dataset_name="WESAD")
-    df_amuse = run_amusement_sensitivity_ablation(wesad_60, dataset_name="WESAD")
+    df_norm = run_normalization_ablation(wesad_60, dataset_name=src_label)
+    df_amuse = run_amusement_sensitivity_ablation(wesad_60, dataset_name=src_label)
 
     df_ablations = pd.concat([df_sensor, df_window, df_norm, df_amuse], ignore_index=True)
     ablation_csv = args.out_dir / "sensor_window_ablations_e3.csv"
@@ -330,3 +360,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

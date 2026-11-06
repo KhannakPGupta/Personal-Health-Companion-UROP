@@ -1,5 +1,5 @@
 dataset,algorithm,rounds,local_epochs,client_fraction,fedprox_mu,macro_f1_mean,macro_f1_std,macro_f1_worst,strain_f1_mean,balanced_acc_mean,roc_auc_mean,ece_mean,false_alerts_persisted_mean,total_comm_float32_kb,total_comm_int8_kb,macro_f1_95ci_lower,macro_f1_95ci_upper
-WESAD,Centralized_LOSO_M2,1,8,1.0,0.0,1.0,0.0,1.0,1.0,1.0,1.0,0.3458,0.0,0.0,0.0,1.0,1.0
-WESAD,FedAvg_FullParticipation,4,2,1.0,0.0,1.0,0.0,1.0,1.0,1.0,1.0,0.4569,0.0,1380.16,345.04,1.0,1.0
-WESAD,FedProx_mu0.05,4,2,1.0,0.05,1.0,0.0,1.0,1.0,1.0,1.0,0.4569,0.0,1380.16,345.04,1.0,1.0
-WESAD,FedAvg_PartialClients_0.6,4,2,0.6,0.0,1.0,0.0,1.0,1.0,1.0,1.0,0.4572,0.0,828.09,207.02,1.0,1.0
+PhysioNet_STRESS,Centralized_LOSO_M2,1,8,1.0,0.0,0.4311,0.1743,0.1007,0.4651,0.5162,0.567,0.2942,63.14,0.0,0.0,0.3779,0.4853
+PhysioNet_STRESS,FedAvg_FullParticipation,4,2,1.0,0.0,0.3455,0.1488,0.0794,0.1358,0.4749,0.5563,0.2966,26.53,9661.09,2415.27,0.2999,0.396
+PhysioNet_STRESS,FedProx_mu0.05,4,2,1.0,0.05,0.3441,0.1508,0.0794,0.1334,0.4728,0.5552,0.2972,26.59,9661.09,2415.27,0.2977,0.3961
+PhysioNet_STRESS,FedAvg_PartialClients_0.6,4,2,0.6,0.0,0.3714,0.1747,0.0492,0.1652,0.4866,0.5422,0.2957,25.04,5796.66,1449.16,0.3144,0.4299

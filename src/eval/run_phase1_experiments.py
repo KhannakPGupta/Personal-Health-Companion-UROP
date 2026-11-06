@@ -173,6 +173,34 @@ def profile_edge_m2(tensors: np.ndarray, labels: np.ndarray) -> Dict[str, float]
     return combined
 
 
+def load_real_or_synthetic_cohorts() -> Tuple[pd.DataFrame, np.ndarray, pd.DataFrame, np.ndarray]:
+    """Load real PhysioNet Stress & Exercise cohorts if extracted, else fallback to synthetic dry-run."""
+    feat_path = Path("data/labels/real_physionet_features_60s.csv")
+    ten_path = Path("data/cache/real_physionet_tensors_60s.npz")
+
+    if feat_path.exists() and ten_path.exists():
+        df_all = pd.read_csv(feat_path)
+        ten_all = np.load(ten_path)["tensors"]
+
+        stress_mask = (df_all["session"] == "STRESS").values
+        ex_mask = (df_all["session"].isin(["AEROBIC", "ANAEROBIC"])).values
+
+        df_stress = df_all[stress_mask].reset_index(drop=True)
+        ten_stress = ten_all[stress_mask]
+
+        df_ex = df_all[ex_mask].reset_index(drop=True)
+        ten_ex = ten_all[ex_mask]
+        return df_stress, ten_stress, df_ex, ten_ex
+
+    wesad_df, wesad_tensors = generate_synthetic_cohort(
+        "WESAD", [f"S{i}" for i in [2, 3, 4, 5, 6, 7]], windows_per_subject=16, seed=42
+    )
+    physio_df, physio_tensors = generate_synthetic_cohort(
+        "PhysioNet", [f"P{i:02d}" for i in range(1, 7)], windows_per_subject=16, seed=101
+    )
+    return wesad_df, wesad_tensors, physio_df, physio_tensors
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Phase 1D LOSO evaluation and edge profiling.")
     parser.add_argument("--out-dir", type=Path, default=Path("results/tables"))
@@ -181,25 +209,23 @@ def main() -> None:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    wesad_df, wesad_tensors = generate_synthetic_cohort(
-        "WESAD", [f"S{i}" for i in [2, 3, 4, 5, 6, 7]], windows_per_subject=16, seed=42
-    )
-    physio_df, physio_tensors = generate_synthetic_cohort(
-        "PhysioNet", [f"P{i:02d}" for i in range(1, 7)], windows_per_subject=16, seed=101
-    )
+    cohort1_df, cohort1_tensors, cohort2_df, cohort2_tensors = load_real_or_synthetic_cohorts()
+    is_real = Path("data/labels/real_physionet_features_60s.csv").exists()
+    label_c1 = "PhysioNet_STRESS" if is_real else "WESAD"
+    label_c2 = "PhysioNet_EXERCISE" if is_real else "PhysioNet"
 
-    df_wesad_res = run_benchmark_suite(wesad_df, wesad_tensors, dataset_label="WESAD", cnn_epochs=args.cnn_epochs)
-    df_physio_res = run_benchmark_suite(physio_df, physio_tensors, dataset_label="PhysioNet", cnn_epochs=args.cnn_epochs)
+    df_c1_res = run_benchmark_suite(cohort1_df, cohort1_tensors, dataset_label=label_c1, cnn_epochs=args.cnn_epochs)
+    df_c2_res = run_benchmark_suite(cohort2_df, cohort2_tensors, dataset_label=label_c2, cnn_epochs=args.cnn_epochs)
 
-    pooled_df = pd.concat([wesad_df, physio_df], ignore_index=True)
-    pooled_tensors = np.concatenate([wesad_tensors, physio_tensors], axis=0)
+    pooled_df = pd.concat([cohort1_df, cohort2_df], ignore_index=True)
+    pooled_tensors = np.concatenate([cohort1_tensors, cohort2_tensors], axis=0)
     df_pooled_res = run_benchmark_suite(pooled_df, pooled_tensors, dataset_label="Pooled", cnn_epochs=args.cnn_epochs)
 
-    full_table = pd.concat([df_wesad_res, df_physio_res, df_pooled_res], ignore_index=True)
+    full_table = pd.concat([df_c1_res, df_c2_res, df_pooled_res], ignore_index=True)
     out_csv = args.out_dir / "loso_benchmark_e1.csv"
     full_table.to_csv(out_csv, index=False)
 
-    edge_stats = profile_edge_m2(wesad_tensors, wesad_df["label"].values)
+    edge_stats = profile_edge_m2(cohort1_tensors, cohort1_df["label"].values)
     edge_df = pd.DataFrame([edge_stats])
     edge_csv = args.out_dir / "edge_profile_m2.csv"
     edge_df.to_csv(edge_csv, index=False)
@@ -210,3 +236,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
