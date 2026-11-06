@@ -1,6 +1,6 @@
 # Personal Health Companion: Wearable Physiological Strain Edge Detection & Contextual Environmental Fusion
 
-**Author:** Khannak P Gupta  
+**Author:** Khanak Gupta  
 **Project Type:** Undergraduate Research Opportunity Programme (UROP) — Edge AI, Wearable Biosignals & Privacy-Preserving Federated Learning  
 **Repository:** [KhannakPGupta/Personal-Health-Companion-UROP](https://github.com/KhannakPGupta/Personal-Health-Companion-UROP)
 
