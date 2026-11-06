@@ -10,7 +10,7 @@ from src.eval.metrics import (
     bootstrap_subject_confidence_intervals,
 )
 from src.eval.calibration import SubjectCalibrator, evaluate_selective_prediction
-from src.eval.loso_evaluator import run_loso_evaluation
+from src.eval.loso_evaluator import run_loso_evaluation, run_cnn_loso_evaluation
 
 
 class TestEvaluationAndCalibration(unittest.TestCase):
@@ -97,6 +97,27 @@ class TestEvaluationAndCalibration(unittest.TestCase):
         self.assertEqual(len(res_df), 3) # Evaluated on each of the 3 subjects
         self.assertIn("macro_f1_mean", summary)
         self.assertIn("macro_f1_95ci_lower", summary)
+
+    def test_cnn_loso_evaluation_pipeline(self):
+        """Test 1D-CNN M2 LOSO evaluation with strict subject isolation."""
+        np.random.seed(42)
+        subjects = np.array(["S2"] * 6 + ["S3"] * 6 + ["S4"] * 6)
+        labels = np.array([0, 0, 0, 1, 1, 1] * 3, dtype=np.float32)
+        tensors = np.random.randn(18, 6, 128).astype(np.float32)
+        tensors[labels == 1] += 1.2
+
+        res_df, summary = run_cnn_loso_evaluation(
+            tensors=tensors,
+            labels=labels,
+            subject_ids=subjects,
+            dataset_name="WESAD",
+            epochs=3,
+            batch_size=6,
+            patience=2,
+        )
+        self.assertEqual(len(res_df), 3)
+        self.assertEqual(summary["model"], "m2_cnn_1d")
+        self.assertIn("macro_f1_mean", summary)
 
 
 if __name__ == "__main__":
