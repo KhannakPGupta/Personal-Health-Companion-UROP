@@ -8,137 +8,361 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Tests: 37 Passed](https://img.shields.io/badge/tests-37%20passed-brightgreen.svg)](#reproducibility--verification)
+[![Dataset: PhysioNet E4](https://img.shields.io/badge/PhysioNet-37%20Subjects%20%7C%2068%20Sessions-006699.svg)](https://physionet.org/content/wearable-device-dataset/1.0.0/)
+[![Dataset: CPCB India AQI](https://img.shields.io/badge/CPCB%20India%20AQI-26%20Cities%20%7C%2029,531%20Days-00897b.svg)](#phase-2-next-day-t1-cpcb-india-aqi-forecasting--contextual-fusion)
 
-A reproducible, subject-independent **Edge-AI + Contextual Environmental Fusion + Federated Learning** research repository for physiological strain detection on wrist-worn wearables (Empatica E4: BVP `64 Hz`, EDA `4 Hz`, TEMP `4 Hz`, ACC `32 Hz`).
+A reproducible, subject-independent **Edge-AI + Causal Next-Day Environmental Hazard Forecasting + Privacy-Preserving Federated Learning** research benchmark for physiological strain detection on wrist-worn wearables (Empatica E4: `BVP 64 Hz`, `EDA 4 Hz`, `TEMP 4 Hz`, `ACC 32 Hz`).
+
+> **Scope & Proxy Disclaimer**: Wearable models in this repository detect **acute autonomic and cardiorespiratory strain proxies** (cognitive/exam stress and aerobic/anaerobic physical exertion) rather than clinical heat-stroke or flood casualties. Hydrological/flood hazards are not modeled.
 
 ---
 
-## Key Empirical Findings & Methodological Disclosures
+## Table of Contents
+1. [Visual System Architecture & End-to-End Dataflow](#1-visual-system-architecture--end-to-end-dataflow)
+2. [Signal Processing, 26-Feature Pipeline & Calibration Architecture](#2-signal-processing-26-feature-pipeline--calibration-architecture)
+3. [Evaluation E1: Within-Dataset Subject-Independent LOSO Benchmark](#3-evaluation-e1-within-dataset-subject-independent-loso-benchmark)
+4. [Evaluation E2: Cross-Protocol Domain Shift & Transfer Failure Analysis](#4-evaluation-e2-cross-protocol-domain-shift--transfer-failure-analysis)
+5. [Evaluation E3: Sensor, Feature (21 vs 26), Window & Calibration Ablations](#5-evaluation-e3-sensor-feature-21-vs-26-window--calibration-ablations)
+6. [Phase 1D: Multi-Model Edge Deployment & Int8 Quantization Profile](#6-phase-1d-multi-model-edge-deployment--int8-quantization-profile)
+7. [Phase 2: Next-Day (`t+1`) CPCB India AQI Forecasting & Contextual Fusion](#7-phase-2-next-day-t1-cpcb-india-aqi-forecasting--contextual-fusion)
+8. [Phase 3: Privacy-Preserving Federated Learning Benchmark](#8-phase-3-privacy-preserving-federated-learning-benchmark)
+9. [Repository Structure & Reproducibility Commands](#9-repository-structure--reproducibility-commands)
 
-This benchmark evaluates **all 37 real human subjects** (`68` subject-protocol recordings across `PhysioNet_STRESS` [`n=36`], `PhysioNet_EXERCISE` [`n=32`], and `Pooled` [`n=37`]) from the **PhysioNet Wearable Exam Stress & Exercise Dataset v1.0.0** ([DOI: 10.13026/kvf3-0c87](https://physionet.org/content/wearable-device-dataset/1.0.0/)) alongside **29,531 real daily air-quality records across 26 Indian cities (`2015–2020`)** from the Central Pollution Control Board (`data/raw/india_aqi/city_day.csv`).
+---
 
-### 1. Within-Dataset Subject-Independent LOSO (`E1`: `results/tables/loso_benchmark_e1.csv`)
-All tabular models use **26 features** (`21` base time/frequency features + `5` cross-sensor autonomic interaction ratios); the `M2 1D-CNN` operates directly on **6 raw sensor channels** (`BVP, EDA, TEMP, ACC_x, ACC_y, ACC_z`) resampled to `32 Hz`.
+## 1. Visual System Architecture & End-to-End Dataflow
 
-| Cohort | Subjects (`n`) | Median (`Min`) Win/Sub | Model | Features | Macro-F1 (Mean ± SD) | 95% Bootstrap CI | Balanced Acc | ROC-AUC | PR-AUC | Persisted FA Win/hr | FA Onset Episodes/hr |
+![Three-Phase System Architecture Overview](results/figures/fig7_system_architecture_overview.png)
+
+### Interactive System Architecture Flowchart
+
+```mermaid
+flowchart LR
+    subgraph S1["Phase 1: Wrist Wearable Edge Pipeline (Empatica E4)"]
+        direction TB
+        W["Raw E4 Streams\n• BVP (64 Hz)\n• EDA (4 Hz)\n• TEMP (4 Hz)\n• ACC (32 Hz)"] --> SL["Sliding Window Slicer\n• 60s Window, 15s Stride\n• ±30s Transition Drop"]
+        SL --> FE["Tabular Feature Engine\n• 21 Base Time/Freq Features\n• 5 Autonomic Interaction Ratios\n• Resting-Prefix Z-Score Calib."]
+        SL --> TB["Raw 6-Channel Tensor\n• Resampled to 32 Hz\n• Shape: (6, 1920)"]
+        FE --> M01["Edge Tabular Classifiers\n• M0 LogReg (0.05 KB int8)\n• M1 HistGB (103.6 KB int8)\n• M1 RandForest (309.1 KB int8)"]
+        TB --> M2["Compact 1D-CNN (GroupNorm)\n• 12,161 Params\n• 12.88 KB (int8, 4.29x)"]
+    end
+
+    subgraph S3["Phase 3: Federated Learning (PhysioNet_STRESS)"]
+        direction TB
+        FLC["35 Client Subjects / Round\n(Local SGD on Private Windows)"] <-->|"Int8 Weight Updates\n(8.86 - 14.77 KB Total)"| FLA["FedAvg / FedProx Aggregator\n(Macro-F1 = 0.6588, AUC = 0.8062)"]
+    end
+
+    subgraph S2["Phase 2: Next-Day (t+1) CPCB AQI + Heat Fusion"]
+        direction TB
+        CPCB["Real CPCB India city_day.csv\n• 26 Cities, 29,531 Daily Rows\n• Day-t Pollutants + 3-Day Lags"] --> AQI["Next-Day Hazard Forecaster\n• Target: AQI_{t+1} > 200\n• Test Macro-F1 = 0.9094\n• Test ROC-AUC = 0.9808"]
+        TEMP_AMB["Ambient Meteorology\n• High Heat Rule: T >= 38.0°C"] --> FUS["Contextual Risk Engine\n• K=2 Persistence Hysteresis\n• ACC Motion Context Gating\n• 4-Tier Alert Escalation"]
+        AQI --> FUS
+    end
+
+    M01 -->|"p_phys(t)"| FUS
+    M2 -->|"p_phys(t)"| FUS
+    FLA -.->|"Global Weights"| M01
+```
+
+---
+
+## 2. Signal Processing, 26-Feature Pipeline & Calibration Architecture
+
+Every 60-second window (with 15-second stride and $\pm 30\text{ s}$ protocol transition exclusion buffer) is processed along two parallel representations:
+1. **26 Hand-Crafted Physiological Features (`M0` & `M1` Models)**: `21` base single-sensor features + `5` cross-sensor autonomic interaction ratios (`src/features/extractor.py`).
+2. **6-Channel Raw Temporal Tensors (`M2 1D-CNN`)**: `(BVP, EDA, TEMP, ACC_x, ACC_y, ACC_z)` interpolated to a common `32 Hz` grid (`(6, 1920)` per 60s window) normalized via channel-wise `GroupNorm` (`src/models/cnn_1d.py`).
+
+```mermaid
+flowchart TD
+    subgraph RAW["Multi-Rate Empatica E4 Sensor Streams (60s Window, 15s Stride)"]
+        BVP["BVP (64 Hz, 3840 samples)\nBandpass + Peak Detection"]
+        EDA["EDA (4 Hz, 240 samples)\nTonic SCL / Phasic SCR Split"]
+        TEMP["TEMP (4 Hz, 240 samples)\nPeripheral Skin Thermometry"]
+        ACC["ACC 3-Axis (32 Hz, 1920x3)\nDynamic ENMO & Jerk"]
+    end
+
+    BVP --> F_BVP["6 BVP/HRV Features\n• hr_mean, hr_std\n• ibi_mean, ibi_rmssd, ibi_sdnn\n• bvp_peak_to_peak"]
+    EDA --> F_EDA["5 Electrodermal Features\n• eda_mean, eda_std, eda_deriv_std\n• eda_scr_count, eda_tonic_slope"]
+    TEMP --> F_TEMP["4 Thermal Features\n• temp_mean, temp_std\n• temp_slope, temp_min_max_range"]
+    ACC --> F_ACC["6 Kinematic Features\n• acc_mag_mean, acc_mag_std\n• acc_enmo, acc_jerk_mean\n• acc_x_mean, acc_y_mean"]
+
+    F_BVP & F_EDA & F_TEMP & F_ACC --> BASE21["21 Base Modality Features\n(ALL_SENSORS_21_BASE: Stress F1 = 0.6572)"]
+    BASE21 --> INT5["+ 5 Cross-Sensor Autonomic Ratios\n22. hr_per_enmo (Cardio-Kinematic Ratio)\n23. eda_per_enmo (Sudomotor-Kinematic Ratio)\n24. sympathetic_index (HR / RMSSD)\n25. electrodermal_reactivity (SCR * Slope)\n26. thermal_cardiac_coupling (HR * TempSlope)"]
+    INT5 --> FULL26["26 Full Tabular Features\n(ALL_SENSORS: Stress F1 = 0.6544)"]
+
+    FULL26 --> CALIB{"Subject Calibration Mode\n(src/features/normalizer.py)"}
+    CALIB -->|"Default Deployment"| C_PRE["UnsupervisedRestingPrefixCalibrated\n(Uses first 15% of session windows;\nAssumes initial rest -> F1 = 0.6544)"]
+    CALIB -->|"Unnormalized"| C_RAW["RawUnnormalized\n(No subject baseline -> F1 = 0.3887)"]
+    CALIB -->|"Theoretical Upper Bound"| C_ORA["PerSubjectBaseline_Oracle\n(Uses true y=0 windows -> F1 = 0.7025)"]
+```
+
+---
+
+## 3. Evaluation E1: Within-Dataset Subject-Independent LOSO Benchmark
+
+We evaluate **all 37 real human subjects** (`68` subject-protocol sessions across `PhysioNet_STRESS` [`n=36`], `PhysioNet_EXERCISE` [`n=32`], and `Pooled` [`n=37`]) from the **PhysioNet Wearable Exam Stress & Exercise Dataset v1.0.0** ([DOI: 10.13026/kvf3-0c87](https://physionet.org/content/wearable-device-dataset/1.0.0/)).
+
+![Evaluation E1: LOSO Model Comparison](results/figures/fig1_loso_model_comparison.png)
+
+### Zero-Leakage LOSO & Persisted Alert Evaluation Flow
+
+```mermaid
+sequenceDiagram
+    participant Data as 37 Real Subjects (68 Sessions)
+    participant Split as LOSO Splitter (assert_no_subject_leakage)
+    participant Calib as Resting-Prefix Normalizer
+    participant Model as Edge Classifier (M0 / M1 / M2)
+    participant Persist as K=2 Hysteresis Filter
+
+    loop For each held-out test subject s in 1..N
+        Data->>Split: Partition Train (N-1 subjects) vs Test (Subject s)
+        Note over Split: Strict assertion: Train_IDs ∩ Test_IDs = ∅
+        Split->>Calib: Fit global fallback stats on Train only
+        Calib->>Calib: Calibrate Subject s using initial 15% resting prefix
+        Calib->>Model: Fit on Train windows + Platt Scaling on 15% Train-Val subjects
+        Model->>Persist: Predict chronological probabilities p_t on Subject s
+        Persist->>Persist: Trigger persisted alarm a_t=1 iff K=2 consecutive windows >= θ
+    end
+```
+
+### E1 Summary Table (`results/tables/loso_benchmark_e1.csv`)
+
+| Cohort | Subjects (`n`) | Median (`Min`) Win/Sub | Model | Features | Macro-F1 (Mean ± SD) | 95% Bootstrap CI | Balanced Acc | ROC-AUC | ECE | Persisted FA Win/hr | FA Onset Episodes/hr |
 | :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **PhysioNet_STRESS** | 36 | 53 (`31`) | **M0 Logistic Regression** | 26 | **0.6658 ± 0.1350** | `[0.6197, 0.7056]` | **0.7414** | **0.8235** | **0.8759** | 25.94 | 3.89 |
-| **PhysioNet_STRESS** | 36 | 53 (`31`) | **M1 HistGradientBoosting** | 26 | **0.6616 ± 0.1653** | `[0.6061, 0.7131]` | 0.6985 | 0.7824 | 0.8588 | 13.91 | 2.09 |
-| **PhysioNet_STRESS** | 36 | 53 (`31`) | **M1 Random Forest** | 26 | **0.6544 ± 0.1693** | `[0.5973, 0.7073]` | 0.6848 | 0.7884 | 0.8617 | 15.55 | 2.16 |
-| **PhysioNet_STRESS** | 36 | 53 (`31`) | M1 Decision Tree | 26 | 0.5944 ± 0.1636 | `[0.5382, 0.6461]` | 0.6305 | 0.6775 | 0.7998 | 21.62 | 4.65 |
-| **PhysioNet_STRESS** | 36 | 53 (`31`) | M2 Compact 1D-CNN (GroupNorm) | 6 ch | 0.5337 ± 0.0956 | `[0.5030, 0.5653]` | 0.5602 | 0.6900 | 0.8087 | 2.21 | 0.45 |
-| **PhysioNet_EXERCISE** | 32 | 59 (`13`) | **M1 HistGradientBoosting** | 26 | **0.8941 ± 0.0879** | `[0.8620, 0.9227]` | **0.9145** | **0.9749** | **0.9862** | 16.21 | 2.06 |
-| **PhysioNet_EXERCISE** | 32 | 59 (`13`) | **M1 Random Forest** | 26 | **0.8926 ± 0.1050** | `[0.8535, 0.9248]` | 0.9112 | 0.9726 | 0.9854 | 15.92 | 2.07 |
-| **PhysioNet_EXERCISE** | 32 | 59 (`13`) | **M0 Logistic Regression** | 26 | **0.8881 ± 0.0962** | `[0.8518, 0.9182]` | 0.9131 | 0.9733 | 0.9865 | 7.31 | 1.04 |
-| **PhysioNet_EXERCISE** | 32 | 59 (`13`) | M1 Decision Tree | 26 | 0.8781 ± 0.1057 | `[0.8384, 0.9107]` | 0.9036 | 0.9261 | 0.9465 | 17.56 | 2.21 |
-| **PhysioNet_EXERCISE** | 32 | 59 (`13`) | M2 Compact 1D-CNN (GroupNorm) | 6 ch | 0.6622 ± 0.1447 | `[0.6122, 0.7115]` | 0.6771 | 0.7746 | 0.8489 | 31.34 | 6.93 |
-| **Pooled (All Subjects)** | 37 | 98 (`37`) | **M1 HistGradientBoosting** | 26 | **0.7869 ± 0.1239** | `[0.7450, 0.8241]` | **0.8096** | **0.8951** | **0.9035** | 12.69 | 1.96 |
-| **Pooled (All Subjects)** | 37 | 98 (`37`) | **M1 Random Forest** | 26 | **0.7812 ± 0.1236** | `[0.7393, 0.8186]` | 0.8037 | 0.8919 | 0.9032 | 12.63 | 1.80 |
-| **Pooled (All Subjects)** | 37 | 98 (`37`) | **M2 Compact 1D-CNN (GroupNorm)** | 6 ch | **0.7157 ± 0.1236** | `[0.6754, 0.7547]` | 0.7224 | 0.8065 | 0.8434 | 15.86 | 2.84 |
-| **Pooled (All Subjects)** | 37 | 98 (`37`) | M0 Logistic Regression | 26 | 0.7155 ± 0.1190 | `[0.6756, 0.7518]` | 0.7615 | 0.8414 | 0.8758 | 19.86 | 2.91 |
+| **PhysioNet_STRESS** | 36 | 53 (`31`) | **M0 Logistic Regression** | 26 | **0.6658 ± 0.1350** | `[0.6197, 0.7056]` | **0.7414** | **0.8235** | 0.2455 | 25.94 | 3.89 |
+| **PhysioNet_STRESS** | 36 | 53 (`31`) | **M1 HistGradientBoosting** | 26 | **0.6616 ± 0.1653** | `[0.6061, 0.7131]` | 0.6985 | 0.7824 | 0.2602 | 13.91 | 2.09 |
+| **PhysioNet_STRESS** | 36 | 53 (`31`) | **M1 Random Forest** | 26 | **0.6544 ± 0.1693** | `[0.5973, 0.7073]` | 0.6848 | 0.7884 | 0.2336 | 15.55 | 2.16 |
+| **PhysioNet_STRESS** | 36 | 53 (`31`) | M1 Decision Tree | 26 | 0.5944 ± 0.1636 | `[0.5382, 0.6461]` | 0.6305 | 0.6775 | 0.2736 | 21.62 | 4.65 |
+| **PhysioNet_STRESS** | 36 | 53 (`31`) | M2 Compact 1D-CNN (GroupNorm) | 6 ch | 0.5337 ± 0.0956 | `[0.5030, 0.5653]` | 0.5602 | 0.6900 | 0.1932 | 2.21 | 0.45 |
+| **PhysioNet_STRESS** | 36 | 53 (`31`) | M0 Majority Dummy | 26 | 0.4359 ± 0.0403 | `[0.4213, 0.4490]` | 0.5000 | 0.5000 | 0.2187 | 0.00 | 0.00 |
+| **PhysioNet_EXERCISE** | 32 | 59 (`13`) | **M1 HistGradientBoosting** | 26 | **0.8941 ± 0.0879** | `[0.8620, 0.9227]` | **0.9145** | **0.9749** | 0.0650 | 16.21 | 2.06 |
+| **PhysioNet_EXERCISE** | 32 | 59 (`13`) | **M1 Random Forest** | 26 | **0.8926 ± 0.1050** | `[0.8535, 0.9248]` | 0.9112 | 0.9726 | 0.0725 | 15.92 | 2.07 |
+| **PhysioNet_EXERCISE** | 32 | 59 (`13`) | **M0 Logistic Regression** | 26 | **0.8881 ± 0.0962** | `[0.8518, 0.9182]` | 0.9131 | 0.9733 | 0.0642 | 7.31 | 1.04 |
+| **PhysioNet_EXERCISE** | 32 | 59 (`13`) | M1 Decision Tree | 26 | 0.8781 ± 0.1057 | `[0.8384, 0.9107]` | 0.9036 | 0.9261 | 0.0684 | 17.56 | 2.21 |
+| **PhysioNet_EXERCISE** | 32 | 59 (`13`) | M2 Compact 1D-CNN (GroupNorm) | 6 ch | 0.6622 ± 0.1447 | `[0.6122, 0.7115]` | 0.6771 | 0.7746 | 0.2073 | 31.34 | 6.93 |
+| **Pooled (All Subjects)** | 37 | 98 (`37`) | **M1 HistGradientBoosting** | 26 | **0.7869 ± 0.1239** | `[0.7450, 0.8241]` | **0.8096** | **0.8951** | 0.1610 | 12.69 | 1.96 |
+| **Pooled (All Subjects)** | 37 | 98 (`37`) | **M1 Random Forest** | 26 | **0.7812 ± 0.1236** | `[0.7393, 0.8186]` | 0.8037 | 0.8919 | 0.1518 | 12.63 | 1.80 |
+| **Pooled (All Subjects)** | 37 | 98 (`37`) | **M2 Compact 1D-CNN (GroupNorm)** | 6 ch | **0.7157 ± 0.1236** | `[0.6754, 0.7547]` | 0.7224 | 0.8065 | 0.1818 | 15.86 | 2.84 |
+| **Pooled (All Subjects)** | 37 | 98 (`37`) | M0 Logistic Regression | 26 | 0.7155 ± 0.1190 | `[0.6756, 0.7518]` | 0.7615 | 0.8414 | 0.1852 | 19.86 | 2.91 |
 
-> **Exact False-Alarm Metric Definitions (`src/eval/metrics.py`)**:
-> 1. **`false_alerts_persisted_per_hr`**: Number of persisted false-positive windows ($y_t = 0 \land a_t = 1$, after $K=2$ consecutive raw detections) normalized per hour of true baseline time ($T_{\text{base,hr}} = N_{\text{base}} \times 15\text{ s} / 3600$). Because windows overlap with a 15-second stride, a single 60-second false-positive excursion increments this counter 4 times.
-> 2. **`false_alarm_episodes_per_hr`**: Number of distinct persisted alarm **onset transitions** ($a_{t-1} = 0 \to a_t = 1$ while $y_t = 0$) per baseline hour. On `PhysioNet_STRESS`, `13.91–25.94` persisted false-positive windows/hr correspond to **`2.09–3.89` distinct false-alarm onset episodes per baseline hour**, which remains elevated for continuous clinical alerting without contextual gating. Furthermore, while `PhysioNet_EXERCISE` has a median of `59` windows/subject (`min=13`), resting baseline periods prior to treadmill/ergometer ramp onset are brief (`2–5` baseline windows in several subjects), inflating per-subject false-alert variance.
+### Exact Mathematical Definitions of False-Alarm Metrics (`src/eval/metrics.py`)
+Let $y_t \in \{0, 1\}$ denote the ground-truth window label at step $t$ (with stride $S = 15\text{ s}$), $\hat{y}_t = \mathbb{I}[\hat{p}_t \ge \tau]$ the raw binary prediction, and $a_t = \mathbb{I}\left[\sum_{j=0}^{K-1} \hat{y}_{t-j} = K\right]$ ($K=2$) the persisted alert indicator. Let $N_{\text{base}} = \sum_{t} \mathbb{I}[y_t = 0]$ be the number of baseline windows and $T_{\text{base,hr}} = (N_{\text{base}} \cdot S) / 3600$ be the baseline duration in hours:
 
----
+$$\text{Persisted FA Windows / hr} = \frac{\sum_{t=1}^{T} \mathbb{I}[y_t = 0 \land a_t = 1]}{T_{\text{base,hr}}}, \qquad \text{FA Onset Episodes / hr} = \frac{\sum_{t=1}^{T} \mathbb{I}[y_t = 0 \land a_t = 1 \land a_{t-1} = 0]}{T_{\text{base,hr}}}$$
 
-### 2. Cross-Protocol Transfer Failure Analysis (`E2`: `results/tables/cross_dataset_transfer_e2.csv`)
-
-Training on cognitive/psychosocial stress (`PhysioNet_STRESS`) and testing zero-shot on physical exertion (`PhysioNet_EXERCISE`), or vice versa, **fails to generalize**:
-
-| Transfer Direction | Model | Target Macro-F1 | Target Balanced Acc | Target ROC-AUC | Finding |
-| :--- | :--- | :---: | :---: | :---: | :--- |
-| `STRESS -> EXERCISE` | M0 Logistic Regression | `0.2140 ± 0.0882` | `0.4832` | `0.1404` | Severe domain shift (inverted ACC correlation) |
-| `STRESS -> EXERCISE` | M1 Random Forest | `0.2024 ± 0.0297` | `0.5000` | `0.3690` | Collapses to all-baseline predictions (`0.2024` matches baseline class share) |
-| `STRESS -> EXERCISE` | M1 HistGradientBoosting | `0.2059 ± 0.0442` | `0.5007` | `0.2896` | Near-all-baseline predictions |
-| `EXERCISE -> STRESS` | M1 HistGradientBoosting | `0.5153 ± 0.1656` | `0.5624` | `0.6252` | Near-chance transfer |
-| `EXERCISE -> STRESS` | M1 Random Forest | `0.4534 ± 0.1684` | `0.5432` | `0.6502` | Fails to detect stationary cognitive stress |
-
-**Core Scientific Finding**: Psychological stress (stationary sympathetic arousal during an exam or interview) and physical exertion (high kinematic movement + metabolic cardiovascular demand) produce **fundamentally distinct physiological signatures**. Treating both as a single interchangeable proxy for "elevated physiological strain" does not hold under zero-shot cross-protocol transfer; multi-protocol pooled training (`Macro-F1 = 0.7869`) or protocol-specific models are required.
+- Because overlapping 60s windows advance by a 15s stride ($240$ windows/hr), a single 60-second false-positive excursion increments `Persisted FA Windows/hr` 4 times.
+- On `PhysioNet_STRESS`, `13.91–25.94` persisted false-positive windows/hr correspond to **`2.09–3.89` distinct false-alarm onset episodes per baseline hour**, which remains high for standalone clinical alerting and motivates **Phase 2 Contextual Environmental Gating**.
+- On `PhysioNet_EXERCISE` (`n=32`, median `59` windows/subject, `min=13`), resting pre-exercise baseline segments are short (`2–5` baseline windows in several subjects), so even a single false-positive window near exercise ramp onset inflates the per-hour rate.
 
 ---
 
-### 3. Sensor, Window, Feature & Normalization Ablations (`E3`: `results/tables/sensor_window_ablations_e3.csv`)
+## 4. Evaluation E2: Cross-Protocol Domain Shift & Transfer Failure Analysis
 
-All `E3` ablations evaluate `m1_random_forest` across the **full 36-subject `PhysioNet_STRESS` cohort**, matching `E1` (`0.6544`) to the 4th decimal place:
+Can a model trained purely on cognitive/psychosocial stress detect physical exertion, or vice versa? **No — zero-shot cross-protocol transfer fails (`results/tables/cross_dataset_transfer_e2.csv`).**
 
-| Ablation Type | Variant | Subjects (`n`) | Features | Macro-F1 (Mean ± SD) | 95% Bootstrap CI | Balanced Acc | ROC-AUC |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Sensor Subset** | `BVP_ONLY` | 36 | 6 | `0.4820 ± 0.1190` | `[0.4437, 0.5206]` | `0.5210` | `0.5608` |
-| **Sensor Subset** | `EDA_ONLY` | 36 | 5 | `0.6196 ± 0.1657` | `[0.5630, 0.6708]` | `0.6683` | `0.7852` |
-| **Sensor Subset** | `BVP_EDA` | 36 | 11 | `0.6157 ± 0.1726` | `[0.5572, 0.6688]` | `0.6512` | `0.7793` |
-| **Sensor Subset** | `BVP_EDA_TEMP` | 36 | 15 | `0.6242 ± 0.1665` | `[0.5673, 0.6754]` | `0.6584` | `0.7834` |
-| **Sensor Subset** | `ALL_SENSORS_21_BASE` (no interactions) | 36 | 21 | **`0.6572 ± 0.1604`** | `[0.6022, 0.7069]` | `0.6884` | **`0.7931`** |
-| **Sensor Subset** | `ALL_SENSORS` (`21` base + `5` interactions) | 36 | 26 | `0.6544 ± 0.1693` | `[0.5973, 0.7073]` | `0.6848` | `0.7884` |
-| **Window Length** | `W30_S15` (`30s` window, `15s` stride) | 36 | 26 | `0.6406 ± 0.1670` | `[0.5841, 0.6921]` | `0.6694` | `0.7798` |
-| **Window Length** | `W60_S15` (`60s` window, `15s` stride) | 36 | 26 | `0.6544 ± 0.1693` | `[0.5973, 0.7073]` | `0.6848` | `0.7884` |
-| **Window Length** | `W120_S30` (`120s` window, `30s` stride) | 36 | 26 | `0.6596 ± 0.1782` | `[0.5988, 0.7145]` | `0.6929` | `0.7867` |
-| **Normalization** | `RawUnnormalized` (uncalibrated across subjects) | 36 | 26 | `0.3887 ± 0.1846` | `[0.3292, 0.4485]` | `0.5015` | `0.5204` |
-| **Normalization** | `UnsupervisedSessionZScore` | 36 | 26 | `0.4879 ± 0.0680` | `[0.4655, 0.5096]` | `0.5318` | `0.6095` |
-| **Normalization** | `UnsupervisedRestingPrefixCalibrated` *(Default)* | 36 | 26 | `0.6544 ± 0.1693` | `[0.5973, 0.7073]` | `0.6848` | `0.7884` |
-| **Normalization** | `PerSubjectBaseline_Oracle` *(Oracle Upper Bound)* | 36 | 26 | **`0.7025 ± 0.1369`** | `[0.6562, 0.7445]` | `0.7289` | `0.8180` |
-| **Cohort Split** | `Protocol_S_v1_18subs` (`S01–S18`) | 18 | 26 | `0.6776 ± 0.1695` | `[0.5947, 0.7495]` | `0.7082` | `0.8075` |
-| **Cohort Split** | `Protocol_f_v2_18subs` (`f01–f14_b`) | 18 | 26 | `0.6347 ± 0.1669` | `[0.5539, 0.7072]` | `0.6644` | `0.7699` |
+![Evaluation E2: Cross-Protocol Transfer Failure](results/figures/fig5_cross_protocol_transfer_heatmap.png)
 
-**Key Ablation Takeaways**:
-- **Overlapping Confidence Intervals & Marginal `TEMP`/`ACC` Gain**: Across `EDA_ONLY` (`0.6196`, CI `[0.5630, 0.6708]`), `BVP_EDA` (`0.6157`), `BVP_EDA_TEMP` (`0.6242`), and `ALL_SENSORS` (`0.6544`, CI `[0.5973, 0.7073]`), the 95% bootstrap confidence intervals overlap substantially. Adding peripheral wrist skin temperature (`TEMP`) increases Macro-F1 by only `+0.0085` over `BVP_EDA`, and adding `ACC` adds `+0.0302`. This is a critical domain finding for heat-health wearables: during indoor cognitive stress in a thermally controlled room, wrist skin temperature and movement contribute almost no discriminative signal compared to electrodermal activity (`EDA`).
-- **Base `21` vs Extended `26` Features**: The `21` base features (`ALL_SENSORS_21_BASE`, `Macro-F1 = 0.6572`) and `26` features (`ALL_SENSORS`, `Macro-F1 = 0.6544`) perform identically within statistical noise; the 5 hand-crafted autonomic interaction ratios do not improve tree-based LOSO generalization over the 21 base features.
-- **Calibration Assumptions**: `UnsupervisedRestingPrefixCalibrated` (`0.6544`) requires the practical assumption that a wearable session begins with a resting prefix (`first 15%` of windows). `PerSubjectBaseline_Oracle` (`0.7025`) uses ground-truth baseline labels (`y == 0`) across the entire recording and is reported strictly as a theoretical **oracle upper bound**.
-- **WESAD Clarification**: Only the **PhysioNet Wearable Exam Stress & Exercise Dataset** (`68` subject-protocol sessions) is evaluated in this repository; the **WESAD** dataset is **not** evaluated here due to licensing/redistribution constraints.
+### Why Cross-Protocol Transfer Fails: Opposite Physiological Regimes
 
----
+```mermaid
+flowchart TD
+    subgraph STRESS_REGIME["Protocol A: Cognitive / Psychosocial Stress (PhysioNet_STRESS)"]
+        S_IN["Stationary Seated Subject\n(Exam / Trier Social Stress)"] --> S_SIG["Physiological Signature:\n• Phasic EDA SCR Bursts ↑↑\n• Sympathetic HR/HRV Shift ↑\n• Kinematic Motion (ACC ENMO) ≈ 0\n• Wrist Skin Temp Slope ≈ Flat"]
+    end
 
-### 4. Multi-Model Edge Deployment & Quantization Profile (`results/tables/edge_profile_m2.csv`)
+    subgraph EX_REGIME["Protocol B: Aerobic / Anaerobic Exertion (PhysioNet_EXERCISE)"]
+        E_IN["Treadmill / Cycle Ergometer\n(High Metabolic Load)"] --> E_SIG["Physiological Signature:\n• Kinematic Motion (ACC ENMO) ↑↑↑\n• Heart Rate (130-180 BPM) ↑↑↑\n• Thermal Vasodilation / Sweat ↑↑"]
+    end
 
-All 5 models (`M0`, `M1` family, `M2`) are **trained on an 80% subject-isolated training split (`28` subjects, `2,794` windows)** and evaluated on a **held-out 20% subject test split (`9` subjects, `758` windows)** before and after `float32 -> int8` quantization:
+    S_SIG -.->|"Zero-Shot Transfer: STRESS -> EXERCISE\nMacro-F1 = 0.2024 (All-Baseline Collapse)\nROC-AUC = 0.14 - 0.50"| EX_REGIME
+    E_SIG -.->|"Zero-Shot Transfer: EXERCISE -> STRESS\nMacro-F1 = 0.4534 - 0.5153\n(Misses Stationary Stress)"| STRESS_REGIME
+```
 
-| Model | Params / Nodes | Float32 Size (KB) | Int8 Size (KB) | Compression Ratio | Held-Out Float32 Macro-F1 | Held-Out Int8 Macro-F1 | $\Delta$ Macro-F1 | Float32 Bal Acc | Int8 Bal Acc | Desktop x86_64 CPU Proxy Latency (`p50` / `p95` ms) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **M0 Logistic Regression** | 27 params | `0.91 KB` | **`0.05 KB`** | **`18.20x`** | `0.9075` | `0.9066` | `-0.0009` | `0.8925` | `0.8906` | `0.143 / 0.258 ms` |
-| **M1 Decision Tree** | 25 nodes | `3.05 KB` | `1.52 KB` | `2.00x` | `0.9099` | `0.9099` | `0.0000` | `0.9036` | `0.9036` | `0.070 / 0.119 ms` |
-| **M1 HistGradientBoosting** | 2,546 nodes | `207.09 KB` | `103.55 KB` | `2.00x` | `0.9023` | `0.9023` | `0.0000` | `0.8938` | `0.8938` | `1.789 / 2.868 ms` |
-| **M1 Random Forest** | 7,324 nodes | `618.25 KB` | `309.12 KB` | `2.00x` | `0.9301` | `0.9301` | `0.0000` | `0.9182` | `0.9182` | `5.489 / 8.711 ms` |
-| **M2 Compact 1D-CNN** | 12,161 params | `55.22 KB` | **`12.88 KB`** | **`4.29x`** | `0.7365` | `0.7355` | `-0.0010` | `0.7368` | `0.7349` | `1.211 / 1.986 ms` |
+### Cross-Protocol Transfer Table (`results/tables/cross_dataset_transfer_e2.csv`)
 
-- **Hardware Disclosure**: Latency numbers are measured single-sample on a **Desktop x86_64 CPU proxy** (`torch.set_num_threads(1)`), **not** on a physical Cortex-M4 wearable MCU.
-- **Best Edge Trade-off**: `M0 Logistic Regression` achieves higher accuracy than `M2 1D-CNN` while requiring only **`0.05 KB` (`53 bytes`)** in `int8` (`18.2x` compression) and `0.143 ms` proxy inference latency. For tree ensembles, `M1 HistGradientBoosting` (`103.55 KB` quantized) fits comfortably inside a `256 KB` Cortex-M4F flash budget, whereas `M1 Random Forest` (`618.25 KB` float32 / `309.12 KB` quantized) exceeds tight MCU flash budgets.
+| Transfer Direction | Source Cohort | Target Cohort | Model | Target Macro-F1 (Mean ± SD) | 95% Bootstrap CI | Balanced Acc | ROC-AUC | Persisted FA Win/hr | Empirical Behavior |
+| :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| `STRESS -> EXERCISE` | Stress (`n=36`) | Exercise (`n=32`) | M0 Logistic Regression | `0.2024 ± 0.0296` | `[0.1896, 0.2169]` | `0.5000` | `0.2952` | `0.00` | Collapses to all-baseline (`0.2024` = baseline share) |
+| `STRESS -> EXERCISE` | Stress (`n=36`) | Exercise (`n=32`) | M1 Random Forest | `0.2024 ± 0.0296` | `[0.1896, 0.2169]` | `0.5000` | `0.1387` | `0.00` | Inverted feature correlation (`ROC-AUC = 0.1387`) |
+| `STRESS -> EXERCISE` | Stress (`n=36`) | Exercise (`n=32`) | M1 HistGradientBoosting | `0.2024 ± 0.0296` | `[0.1896, 0.2169]` | `0.5000` | `0.1753` | `0.00` | Collapses to all-baseline predictions |
+| `STRESS -> EXERCISE` | Stress (`n=36`) | Exercise (`n=32`) | M2 Compact 1D-CNN | `0.3802 ± 0.1389` | `[0.3316, 0.4277]` | `0.4589` | `0.4050` | `151.78` | Below-chance domain generalization |
+| `EXERCISE -> STRESS` | Exercise (`n=32`) | Stress (`n=36`) | **M0 Logistic Regression** | **`0.5153 ± 0.1126`** | `[0.4663, 0.5699]` | `0.6954` | `0.7722` | `48.06` | Partial cardiovascular transfer, high false alarms |
+| `EXERCISE -> STRESS` | Exercise (`n=32`) | Stress (`n=36`) | M1 Random Forest | `0.4359 ± 0.0403` | `[0.4213, 0.4490]` | `0.5000` | `0.5582` | `0.00` | Requires high ACC motion to fire; predicts all baseline |
+| `EXERCISE -> STRESS` | Exercise (`n=32`) | Stress (`n=36`) | M1 HistGradientBoosting | `0.4359 ± 0.0403` | `[0.4213, 0.4490]` | `0.5000` | `0.3910` | `0.00` | Predicts all baseline on stationary subjects |
 
 ---
 
-### 5. Phase 2: Next-Day (`t+1`) CPCB India AQI Forecasting & Contextual Fusion (`results/tables/phase2_contextual_fusion_demo.csv`)
+## 5. Evaluation E3: Sensor, Feature (21 vs 26), Window & Calibration Ablations
 
-1. **Real CPCB India `city_day.csv` Dataset (`data/raw/india_aqi/city_day.csv`)**:
-   - **Source**: `29,531` daily air-quality records across **26 Indian cities (`2015–2020`)**; `25,752` valid city-day pairs after chronological lag alignment (`20,591` chronological training days [first 80% per city] and `5,161` chronological test days [final 20% per city]).
-   - **Next-Day (`t+1`) Forecasting Formulation (`src/fusion/aqi_pipeline.py`)**: Rather than classifying same-day `AQI_t > 200` from same-day pollutants (which would be a deterministic formula lookup), `AmbientAQIPredictor` forecasts **Next-Day Severe/Poor Air Hazard (`y_{t+1} = I[AQI_{t+1} > 200]`)** strictly from day-$t$ pollutants (`PM2.5_t, PM10_t, NO2_t, CO_t, SO2_t, O3_t`) and 3-day rolling temporal lags (`PM2.5_roll3_t, PM10_roll3_t, PM2.5_diff1_t`).
-   - **Held-Out Test Performance (`5,161` chronological test days)**:
-     - **HistGradientBoosting Next-Day Forecaster**: **`Macro-F1 = 0.9094`**, **`Balanced Accuracy = 0.9315`**, **`ROC-AUC = 0.9808`**.
-     - **Naive Same-Day Persistence Baseline ($\hat{y}_{t+1} = y_t$)**: `Macro-F1 = 0.8883`, `Balanced Accuracy = 0.8897` (our forecaster improves Balanced Accuracy by **`+4.18%`** over persistence by capturing multi-day pollutant accumulation/dissipation trends).
-2. **Explicit Ambient Heat & Air-Quality Decision Logic (`src/fusion/contextual_fusion.py`)**:
-   - Both predicted next-day air-quality hazard (`p_env >= 0.50`) **and** extreme ambient heat (`ambient_temp_c >= 38.0 °C`) directly govern `AlertLevel` escalation (`MODERATE_ADVISORY` and `HIGH_RISK_ALERT`), alongside two end-to-end scenarios (`S7_Real_OOF_STRESS_S01_Delhi_PoorAQI`, `S8_Real_OOF_AEROBIC_S01_Mumbai_SatisfactoryAQI`) driven by **real out-of-fold LOSO wearable predictions** paired with **real Delhi and Mumbai chronological test-split AQI forecasts**.
-   - *Scope Note*: Hydrological/flood hazards are **not** modeled in this pipeline.
+All `E3` ablations (`results/tables/sensor_window_ablations_e3.csv`) run across the **full 36-subject `PhysioNet_STRESS` cohort**, matching `E1` (`0.6544`) to the 4th decimal place.
 
----
+![Evaluation E3: Sensor, Window & Normalization Ablations](results/figures/fig2_sensor_and_normalization_ablations.png)
 
-### 6. Phase 3: Privacy-Preserving Federated Learning (`results/tables/phase3_federated_benchmark.csv`)
+### E3 Ablation Benchmark Table (`m1_random_forest`, `n=36` Subjects)
 
-We report both **full 36-subject (`35` clients/round) federated tabular logistic regression** and **12-subject (`11` clients/round) federated 1D-CNN** on `PhysioNet_STRESS`:
-
-| Algorithm / Architecture | Cohort Subjects | Clients / Round | Macro-F1 (Mean ± SD) | Balanced Acc | ROC-AUC | Comm Cost (Float32 KB) | Comm Cost (Int8 KB) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Centralized LOSO (`M0 Logistic Regression`)** | 36 | 35 | **`0.6658 ± 0.1350`** | **`0.7414`** | **`0.8235`** | `0.00 KB` | `0.00 KB` |
-| **FedAvg Tabular LogReg (`100%` participation)** | 36 | 35 | `0.6573 ± 0.1342` | `0.7311` | `0.8043` | `59.06 KB` | `14.77 KB` |
-| **FedProx Tabular LogReg ($\mu=0.05$, `100%`)** | 36 | 35 | `0.6584 ± 0.1332` | `0.7330` | `0.8040` | `59.06 KB` | `14.77 KB` |
-| **FedAvg Tabular LogReg (`60%` partial participation)** | 36 | 21 | **`0.6588 ± 0.1337`** | `0.7327` | `0.8062` | `35.44 KB` | **`8.86 KB`** |
-| **Centralized LOSO (`M2 1D-CNN`, full cohort)** | 36 | 35 | `0.5337 ± 0.0956` | `0.5602` | `0.6900` | `0.00 KB` | `0.00 KB` |
-| **FedAvg `M2 1D-CNN` (12-subject subset)** | 12 | 11 | `0.4361 ± 0.1069` | `0.4841` | `0.4706` | `7,759.12 KB` | `1,939.78 KB` |
-| **FedProx `M2 1D-CNN` ($\mu=0.05$, 12-subject subset)** | 12 | 11 | `0.4300 ± 0.1095` | `0.4800` | `0.4645` | `7,759.12 KB` | `1,939.78 KB` |
-
-**Key Federated Takeaway**: Federated `M0 Logistic Regression` across all 36 stress subjects (`35` training clients per LOSO fold) achieves `Macro-F1 = 0.6588` (`ROC-AUC = 0.8062`), within `0.0070` of centralized LOSO (`0.6658`) while requiring only **`8.86 KB` of total `int8` communication** across 20 rounds. By contrast, federated training of the `12,161`-parameter `M2 1D-CNN` on a 12-subject subset fails to converge above chance (`Balanced Accuracy ~ 0.48`, `ROC-AUC = 0.46–0.47`) and requires `1,939.78 KB`, confirming that compact linear/tabular models are far better suited for small-cohort cross-subject federated learning on wearables.
+| Ablation Category | Configuration | Subjects (`n`) | Features | Macro-F1 (Mean ± SD) | 95% Bootstrap CI | Balanced Acc | ROC-AUC | Key Scientific Takeaway |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **Sensor Subset** | `BVP_ONLY` | 36 | 10 | `0.5612 ± 0.1598` | `[0.5109, 0.6113]` | `0.6129` | `0.6786` | Photoplethysmography alone has high inter-subject variance |
+| **Sensor Subset** | `EDA_ONLY` | 36 | 9 | `0.5587 ± 0.1583` | `[0.5050, 0.6104]` | `0.6020` | `0.7130` | Strong ROC-AUC (`0.7130`) from sympathetic sudomotor activity |
+| **Sensor Subset** | `BVP_EDA` | 36 | 16 | `0.6157 ± 0.1636` | `[0.5586, 0.6659]` | `0.6486` | `0.7615` | Combining cardiac + electrodermal streams boosts F1 by `+0.0545` |
+| **Sensor Subset** | `BVP_EDA_TEMP` | 36 | 20 | `0.6242 ± 0.1653` | `[0.5692, 0.6744]` | `0.6557` | `0.7773` | **Wrist `TEMP` adds only `+0.0085` F1 (CIs overlap heavily)** |
+| **Feature Count** | `ALL_SENSORS_21_BASE` | 36 | 21 | **`0.6572 ± 0.1726`** | `[0.6001, 0.7118]` | **`0.6887`** | **`0.7905`** | 21 base features perform on par with (slightly above) 26 features |
+| **Feature Count** | `ALL_SENSORS` (Default) | 36 | 26 | `0.6544 ± 0.1693` | `[0.5973, 0.7073]` | `0.6848` | `0.7884` | Exact match to `E1`; 5 interaction ratios add no gain for trees |
+| **Window Length** | `W30_S10` (`30s` win, `10s` stride) | 36 | 26 | `0.6426 ± 0.1669` | `[0.5877, 0.6951]` | `0.6693` | `0.7873` | Shorter window slightly increases HRV estimation noise |
+| **Window Length** | `W60_S15` (`60s` win, `15s` stride) | 36 | 26 | `0.6544 ± 0.1693` | `[0.5973, 0.7073]` | `0.6848` | `0.7884` | Optimal balance of temporal resolution and HRV stability |
+| **Window Length** | `W120_S30` (`120s` win, `30s` stride) | 36 | 26 | `0.6531 ± 0.1812` | `[0.5902, 0.7073]` | `0.6929` | `0.7775` | Diminishing returns beyond 60s window |
+| **Calibration** | `RawUnnormalized` | 36 | 26 | `0.3887 ± 0.1846` | `[0.3292, 0.4485]` | `0.5015` | `0.5204` | Fails completely (`Balanced Acc = 0.5015`) without calibration |
+| **Calibration** | `UnsupervisedSessionZScore` | 36 | 26 | `0.4879 ± 0.0680` | `[0.4655, 0.5096]` | `0.5318` | `0.6095` | Whole-session z-score dilutes sustained stress |
+| **Calibration** | `UnsupervisedRestingPrefixCalibrated` | 36 | 26 | `0.6544 ± 0.1693` | `[0.5973, 0.7073]` | `0.6848` | `0.7884` | **Assumes initial 15% of session is resting baseline** |
+| **Calibration** | `PerSubjectBaseline_Oracle` | 36 | 26 | **`0.7025 ± 0.1369`** | `[0.6562, 0.7445]` | **`0.7289`** | **`0.8180`** | **Oracle upper bound** (uses ground-truth `y=0` labels) |
+| **Cohort Split** | `Protocol_S_v1_18subs` (`S01–S18`) | 18 | 26 | `0.6776 ± 0.1695` | `[0.5947, 0.7495]` | `0.7082` | `0.8075` | First 18-subject protocol sub-cohort |
+| **Cohort Split** | `Protocol_f_v2_18subs` (`f01–f14_b`) | 18 | 26 | `0.6347 ± 0.1669` | `[0.5539, 0.7072]` | `0.6644` | `0.7699` | Second 18-subject sub-cohort (explains earlier `0.6347` figure) |
 
 ---
 
-## Reproducibility & Verification
+## 6. Phase 1D: Multi-Model Edge Deployment & Int8 Quantization Profile
+
+All 5 models (`M0`, `M1` family, `M2`) are **trained on an 80% subject-isolated split (`28` subjects, `2,794` windows)** and evaluated on a **held-out 20% test split (`9` subjects, `758` windows)** before and after `float32 -> int8` weight/threshold quantization (`results/tables/edge_profile_m2.csv`).
+
+![Phase 1D: Multi-Model Edge Deployment & Quantization Profile](results/figures/fig6_edge_quantization_pareto.png)
+
+### Edge Footprint, Held-Out Test Accuracy & Proxy Latency (`results/tables/edge_profile_m2.csv`)
+
+| Model | Input Representation | Params / Nodes | Float32 Size | Int8 Size | Compression | Held-Out Float32 Macro-F1 | Held-Out Int8 Macro-F1 | $\Delta$ Macro-F1 | Float32 Bal Acc | Int8 Bal Acc | Desktop CPU Proxy Latency (`p50` / `p95`) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **M0 Logistic Regression** | 26 Tabular Features | 27 params | `0.91 KB` | **`0.05 KB`** | **`18.20x`** | `0.9075` | `0.9066` | `-0.0009` | `0.9077` | `0.9068` | `0.143 / 0.200 ms` |
+| **M1 Decision Tree** | 26 Tabular Features | 25 nodes | `3.05 KB` | `1.52 KB` | `2.00x` | `0.9099` | `0.9099` | `0.0000` | `0.9102` | `0.9102` | `0.070 / 0.105 ms` |
+| **M1 HistGradientBoosting** | 26 Tabular Features | 2,546 nodes | `207.09 KB` | **`103.55 KB`** | `2.00x` | `0.9023` | `0.9023` | `0.0000` | `0.9012` | `0.9012` | `1.789 / 2.273 ms` |
+| **M1 Random Forest** | 26 Tabular Features | 7,324 nodes | `618.25 KB` | `309.12 KB` | `2.00x` | **`0.9301`** | **`0.9301`** | `0.0000` | **`0.9306`** | **`0.9306`** | `5.489 / 7.515 ms` |
+| **M2 Compact 1D-CNN** | `32 Hz` 6-Ch Tensor | 12,161 params | `55.22 KB` | **`12.88 KB`** | **`4.29x`** | `0.7365` | `0.7355` | `-0.0010` | `0.7438` | `0.7427` | `1.211 / 1.797 ms` |
+
+> **Hardware Proxy Note**: Latency figures are measured single-threaded (`torch.set_num_threads(1)`) on a **Desktop x86_64 CPU proxy**, not on a physical ARM Cortex-M4 microcontroller. Tabular model latencies exclude the `~1.1 ms` DSP feature-extraction step.
+
+---
+
+## 7. Phase 2: Next-Day (`t+1`) CPCB India AQI Forecasting & Contextual Fusion
+
+![Phase 2: Next-Day AQI Forecast & Multimodal Contextual Risk Fusion](results/figures/fig3_contextual_fusion_matrix.png)
+
+### 7.1 Real CPCB India `city_day.csv` Next-Day (`t+1`) Forecasting Benchmark (`src/fusion/aqi_pipeline.py`)
+- **Dataset (`data/raw/india_aqi/city_day.csv`)**: `29,531` real daily air-quality records across **26 Indian cities (`2015–2020`)**, yielding `25,752` valid city-day pairs after chronological lag construction (`20,591` chronological training days [first 80% per city] and `5,161` chronological test days [final 20% per city]).
+- **Causal Next-Day Formulation**: Predicts **Next-Day Severe/Poor Air Hazard (`y_{t+1} = I[AQI_{t+1} > 200]`)** strictly from day-$t$ pollutants (`PM2.5_t, PM10_t, NO2_t, CO_t, SO2_t, O3_t`) and 3-day rolling temporal lags (`PM2.5_roll3_t, PM10_roll3_t, PM2.5_diff1_t`).
+
+| Forecasting Model | Train Days | Test Days | Test Macro-F1 | Test Balanced Accuracy | Test ROC-AUC | Gain Over Persistence |
+| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| **Naive Same-Day Persistence Baseline ($\hat{y}_{t+1} = y_t$)** | 20,591 | 5,161 | `0.8883` | `0.8897` | — | Baseline |
+| **HistGradientBoosting Next-Day (`t+1`) Forecaster** | 20,591 | 5,161 | **`0.9094`** | **`0.9315`** | **`0.9808`** | **`+0.0211` Macro-F1 / `+4.18%` Bal Acc** |
+
+### 7.2 Multimodal Contextual Alert Escalation Logic (`src/fusion/contextual_fusion.py`)
+
+Both **ambient heat (`ambient_temp_c >= 38.0 °C`)** and **next-day air-quality hazard (`p_env >= 0.50` / `AQI > 200`)** actively govern the 4-tier `AlertLevel` decision tree:
+
+```mermaid
+flowchart TD
+    IN["Window Inputs at Step t:\n• Wearable Strain Prob p_phys(t)\n• K=2 Persisted Strain Flag\n• Motion Context (ACC ENMO >= 0.12g)\n• Next-Day AQI Hazard Prob p_env(t+1)\n• Ambient Temperature T_amb (°C)"] --> PERS{"Is Wearable Strain\nPersisted (K=2)?"}
+
+    PERS -->|"No (Baseline or Transient Spike)"| ENV_CHK{"Is Next-Day AQI Severe (AQI > 200)\nOR High Heat (T_amb >= 38.0°C)?"}
+    ENV_CHK -->|"No"| L0["Tier 0: NORMAL\n(No Intervention Required)"]
+    ENV_CHK -->|"Yes"| L1_ENV["Tier 1: ADVISORY\n(Environmental Precaution Advisory)"]
+
+    PERS -->|"Yes (Sustained Strain)"| MOT_CHK{"Is Subject in High\nAerobic Motion (ENMO >= 0.12g)?"}
+    MOT_CHK -->|"Yes (Intentional Exercise)"| EX_ENV{"Is AQI > 200 OR\nHigh Heat (T_amb >= 38.0°C)?"}
+    EX_ENV -->|"No (Clean/Cool Air)"| L1_EX["Tier 1: ADVISORY\n(Expected Exertional Strain — Hydrate)"]
+    EX_ENV -->|"Yes (Hazardous Air or Heat)"| L2_EX["Tier 2: WARNING\n(High Exertion in Poor AQI / Heat >= 38°C)"]
+
+    MOT_CHK -->|"No (Stationary / Non-Exertional Strain)"| ST_ENV{"Environmental Severity:\nAQI > 300 or (AQI > 200 & T >= 38°C)?"}
+    ST_ENV -->|"Extreme"| L3["Tier 3: CRITICAL_ALERT\n(Unexplained Rest Strain + Severe Hazard)"]
+    ST_ENV -->|"Moderate (AQI > 100 or T >= 38°C)"| L2_ST["Tier 2: WARNING\n(Sustained Rest Strain + Heat/AQI Stress)"]
+    ST_ENV -->|"Benign Environment"| L1_ST["Tier 1: ADVISORY\n(Sustained Autonomic Stress in Clean Air)"]
+```
+
+### 7.3 Contextual Fusion Scenarios (`results/tables/phase2_contextual_fusion_demo.csv`)
+
+Scenarios `S1–S6` verify deterministic rule boundaries (including `S6_Resting_HighHeat_CleanAir` at `39.5 °C`), while **`S7` and `S8` are driven by real out-of-fold LOSO wearable predictions from Subject `S01` paired with real chronological test-split AQI forecasts from Delhi and Mumbai**:
+
+| Scenario ID | Source Type | Temp (`°C`) | Wearable $p_{\text{phys}}$ | Persisted | Motion Context | Ambient AQI (`Tier`) | Composite Score | Alert Level |
+| :--- | :--- | :---: | :---: | :---: | :--- | :---: | :---: | :--- |
+| `S1_Resting_CleanAir` | Rule Verification | `26.0 °C` | `0.180` | `False` | Rest / Light | `42` (`Good`) | `0.150` | `0: NORMAL` |
+| `S2_Transient_Spike_Suppressed` | Rule Verification | `29.0 °C` | `0.680` | `False` | Rest / Light | `85` (`Satisfactory`) | `0.493` | `0: NORMAL` |
+| `S3_Exercise_CleanAir` | Rule Verification | `27.0 °C` | `0.780` | `True` | Vigorous Exercise | `65` (`Satisfactory`) | `0.556` | `1: ADVISORY` |
+| `S4_Exercise_PoorAQI` | Rule Verification | `34.0 °C` | `0.810` | `True` | Vigorous Exercise | `265` (`Poor`) | `0.812` | `2: WARNING` |
+| `S5_NonExertional_SevereAQI` | Rule Verification | `36.0 °C` | `0.790` | `True` | Rest / Light | `340` (`Very Poor`) | `0.869` | `3: CRITICAL_ALERT` |
+| `S6_Resting_HighHeat_CleanAir` | **Heat Rule (`>=38°C`)** | **`39.5 °C`** | `0.640` | `True` | Rest / Light | `78` (`Satisfactory`) | `0.646` | **`2: WARNING`** |
+| **`S7_Real_OOF_STRESS_S01_Delhi_PoorAQI`** | **Real LOSO OOF + Real CPCB** | `33.0 °C` | `0.625` | `True` | Rest / Light | `482` (`Severe`) | `0.779` | **`3: CRITICAL_ALERT`** |
+| **`S8_Real_OOF_AEROBIC_S01_Mumbai_SatisfactoryAQI`** | **Real LOSO OOF + Real CPCB** | `28.5 °C` | `0.946` | `True` | Vigorous Exercise | `64` (`Satisfactory`) | `0.647` | **`1: ADVISORY`** |
+
+---
+
+## 8. Phase 3: Privacy-Preserving Federated Learning Benchmark
+
+We benchmark **full 36-subject (`35` clients/round) federated tabular logistic regression** against **12-subject (`11` clients/round) federated `M2 1D-CNN`** on `PhysioNet_STRESS` (`results/tables/phase3_federated_benchmark.csv`).
+
+![Phase 3: Federated Learning Accuracy vs Communication Cost](results/figures/fig4_federated_comm_vs_f1.png)
+
+### Federated Training & `Int8` Weight-Quantized Aggregation Protocol
+
+```mermaid
+sequenceDiagram
+    participant Server as Central Aggregator Server
+    participant C1 as Client Subject 1 (Local E4 Data)
+    participant C35 as Client Subject 35 (Local E4 Data)
+    participant Test as Held-Out Test Subject s (Zero Leakage)
+
+    loop For each Communication Round r = 1..R
+        Server->>C1: Broadcast Global Weights w^(r) (Int8 Quantized)
+        Server->>C35: Broadcast Global Weights w^(r) (Int8 Quantized)
+        Note over C1,C35: Raw physiological signals NEVER leave the wearable
+        C1->>C1: Local SGD + FedProx Proximal Term (μ/2)||w - w^(r)||^2
+        C35->>C35: Local SGD + FedProx Proximal Term (μ/2)||w - w^(r)||^2
+        C1->>Server: Upload Int8 Weight Update Δw_1^(r)
+        C35->>Server: Upload Int8 Weight Update Δw_35^(r)
+        Server->>Server: Sample-Weighted Aggregation w^(r+1) = Σ (n_k / n) w_k^(r)
+    end
+    Server->>Test: Evaluate Final Global Model w^(R) on Held-Out Subject s
+```
+
+### Phase 3 Federated Benchmark Table (`results/tables/phase3_federated_benchmark.csv`)
+
+| Algorithm / Architecture | Subjects (`n`) | Clients / Round | Rounds $\times$ Epochs | Macro-F1 (Mean ± SD) | 95% Bootstrap CI | Balanced Acc | ROC-AUC | Persisted FA Win/hr | FA Onset Episodes/hr | Float32 Comm | Int8 Comm |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Centralized LOSO (`M0 LogReg`)** | 36 | 35 | Central | **`0.6658 ± 0.1350`** | `[0.6197, 0.7056]` | **`0.7414`** | **`0.8235`** | 25.94 | 3.89 | `0.00 KB` | `0.00 KB` |
+| **FedAvg Tabular LogReg (`100%` clients)** | 36 | 35 | $8 \times 5$ | `0.6573 ± 0.1686` | `[0.6055, 0.7104]` | `0.7149` | `0.8043` | 21.48 | 2.22 | `59.06 KB` | `14.77 KB` |
+| **FedProx Tabular LogReg ($\mu=0.05$, `100%`)** | 36 | 35 | $8 \times 5$ | `0.6584 ± 0.1670` | `[0.6075, 0.7102]` | `0.7160` | `0.8040` | 21.48 | 2.25 | `59.06 KB` | `14.77 KB` |
+| **FedAvg Tabular LogReg (`60%` partial)** | 36 | 21 | $8 \times 5$ | **`0.6588 ± 0.1675`** | `[0.6070, 0.7105]` | **`0.7169`** | **`0.8062`** | 21.72 | 2.22 | `35.44 KB` | **`8.86 KB`** |
+| **Centralized LOSO (`M2 1D-CNN`, full)** | 36 | 35 | Central | `0.5337 ± 0.0956` | `[0.5030, 0.5653]` | `0.5602` | `0.6900` | 2.21 | 0.45 | `0.00 KB` | `0.00 KB` |
+| **FedAvg `M2 1D-CNN` (12-sub cohort)** | 12 | 11 | $6 \times 1$ | `0.4361 ± 0.1069` | `[0.3712, 0.4892]` | `0.4841` | `0.4706` | 3.31 | 1.10 | `7,759.1 KB` | `1,939.8 KB` |
+| **FedProx `M2 1D-CNN` ($\mu=0.05$, 12-sub)** | 12 | 11 | $6 \times 1$ | `0.4300 ± 0.1095` | `[0.3652, 0.4852]` | `0.4800` | `0.4645` | 3.31 | 1.10 | `7,759.1 KB` | `1,939.8 KB` |
+
+---
+
+## 9. Repository Structure & Reproducibility Commands
+
+```text
+├── configs/
+│   └── base.yaml                                  # Global windowing, sensor rates, and seed configuration
+├── data/
+│   └── raw/
+│       ├── india_aqi/city_day.csv                 # Real CPCB India dataset (26 cities, 29,531 daily rows)
+│       └── physionet_stress/                      # Real PhysioNet Wearable Exam Stress & Exercise E4 recordings
+├── docs/
+│   ├── assumptions.md                             # Explicit methodological & hardware proxy disclosures
+│   └── problem_formulation.md                     # Mathematical formulation of Phase 1, Phase 2, and Phase 3
+├── results/
+│   ├── figures/                                   # 7 publication-grade 300-DPI PNG charts (fig1 .. fig7)
+│   └── tables/                                    # 6 reproducible CSV benchmark tables
+├── src/
+│   ├── edge/                                      # Multi-model float32 -> int8 quantization & latency profiler
+│   ├── eval/                                      # LOSO evaluator, E2 transfer, E3 ablations, metrics & plots
+│   ├── features/                                  # 26-feature extractor, resting-prefix normalizer & tensors
+│   ├── federated/                                 # 36-subject Tabular & 12-subject CNN FedAvg/FedProx engine
+│   ├── fusion/                                    # Causal t+1 CPCB AQI forecaster & Heat/AQI risk engine
+│   ├── io/                                        # PhysioNet E4 physiological loader
+│   ├── models/                                    # M0/M1 baselines and GroupNorm M2 1D-CNN
+│   └── windowing/                                 # 60s/15s window slicer with ±30s transition drop
+└── tests/                                         # 37 unit & zero-subject-leakage verification tests
+```
+
+### Run All Verification & Reproduction Scripts
 
 ```bash
 # 1. Run all 37 unit and subject-leakage tests
@@ -150,8 +374,8 @@ python -m src.eval.run_phase1_experiments --data-dir data/raw/physionet_stress -
 # 3. Reproduce Phase 2 (Next-Day CPCB India AQI Forecasting + Out-of-Fold Wearable Fusion) & Phase 3 (Federated Benchmark)
 python -m src.eval.run_phase2_phase3 --physionet-dir data/raw/physionet_stress --results-dir results
 
-# 4. Regenerate all publication figures
-python -m src.eval.plot_results --tables-dir results/tables --figures-dir results/figures
+# 4. Regenerate all 7 publication figures (300 DPI PNGs)
+python -m src.eval.plot_results
 ```
 
 `
@@ -2142,6 +2366,550 @@ def bootstrap_subject_confidence_intervals(
     mean_val = float(np.mean(scores))
 
     return mean_val, ci_lower, ci_upper
+
+`
+
+## FILE: src/eval/plot_results.py
+
+`
+"""Generate 7 publication-ready figures (300 DPI PNGs) from real benchmark tables in results/tables/.
+
+Saves to results/figures/:
+  1. fig1_loso_model_comparison.png
+  2. fig2_sensor_and_normalization_ablations.png
+  3. fig3_contextual_fusion_matrix.png
+  4. fig4_federated_comm_vs_f1.png
+  5. fig5_cross_protocol_transfer_heatmap.png
+  6. fig6_edge_quantization_pareto.png
+  7. fig7_system_architecture_overview.png
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+
+PALETTE = {
+    "PhysioNet_STRESS": "#1f77b4",
+    "PhysioNet_EXERCISE": "#2ca02c",
+    "Pooled": "#ff7f0e",
+}
+
+
+def plot_fig1_loso_comparison(tables_dir: Path, fig_dir: Path) -> None:
+    """Plot LOSO E1 Macro-F1 (with 95% CI error bars), ROC-AUC, and False Alarm Episodes/hr."""
+    df = pd.read_csv(tables_dir / "loso_benchmark_e1.csv")
+    fig, axes = plt.subplots(1, 3, figsize=(16.5, 5.2), dpi=300)
+
+    datasets = ["PhysioNet_STRESS", "PhysioNet_EXERCISE", "Pooled"]
+    models = [
+        "m0_logistic_regression",
+        "m1_decision_tree",
+        "m1_random_forest",
+        "m1_hist_gradient_boosting",
+        "m2_cnn_1d",
+    ]
+    model_labels = [
+        "M0: Logistic\nRegression (26f)",
+        "M1: Decision\nTree (26f)",
+        "M1: Random\nForest (26f)",
+        "M1: HistGrad\nBoosting (26f)",
+        "M2: 1D-CNN\nGroupNorm (6ch)",
+    ]
+    x = np.arange(len(models))
+    width = 0.25
+
+    for idx, ds in enumerate(datasets):
+        sub = df[df["dataset"] == ds].set_index("model").reindex(models)
+        offset = (idx - 1) * width
+        color = PALETTE.get(ds, "#333333")
+
+        # Panel 0: Macro-F1 with 95% Bootstrap CI error bars
+        f1_vals = sub["macro_f1_mean"].values
+        ci_low = f1_vals - sub["macro_f1_95ci_lower"].values
+        ci_high = sub["macro_f1_95ci_upper"].values - f1_vals
+        axes[0].bar(
+            x + offset,
+            f1_vals,
+            width,
+            label=ds,
+            color=color,
+            edgecolor="black",
+            linewidth=0.6,
+            yerr=[np.maximum(0, ci_low), np.maximum(0, ci_high)],
+            capsize=2.5,
+            error_kw={"elinewidth": 0.9, "ecolor": "#222222"},
+        )
+
+        # Panel 1: ROC-AUC
+        axes[1].bar(
+            x + offset,
+            sub["roc_auc_mean"].values,
+            width,
+            label=ds,
+            color=color,
+            edgecolor="black",
+            linewidth=0.6,
+        )
+
+        # Panel 2: False Alarm Onset Episodes per Baseline Hour
+        fa_col = "false_alarm_episodes_mean" if "false_alarm_episodes_mean" in sub.columns else "false_alerts_per_hr_mean"
+        axes[2].bar(
+            x + offset,
+            sub[fa_col].values,
+            width,
+            label=ds,
+            color=color,
+            edgecolor="black",
+            linewidth=0.6,
+        )
+
+    for ax, title, ylabel, ylim in zip(
+        axes,
+        [
+            "(A) Macro-F1 Score (Mean ± 95% Bootstrap CI)",
+            "(B) Area Under ROC Curve (ROC-AUC)",
+            "(C) Persisted False-Alarm Onset Episodes / hr",
+        ],
+        ["Macro-F1 (LOSO)", "ROC-AUC (LOSO)", "Distinct Alarm Onsets / Baseline hr"],
+        [(0.0, 1.05), (0.0, 1.08), (0.0, 8.0)],
+    ):
+        ax.set_xticks(x)
+        ax.set_xticklabels(model_labels, fontsize=8)
+        ax.set_ylim(*ylim)
+        ax.set_ylabel(ylabel, fontsize=9, fontweight="bold")
+        ax.set_title(title, fontsize=9.5, fontweight="bold")
+        ax.grid(axis="y", linestyle="--", alpha=0.45)
+        ax.legend(fontsize=8, loc="upper left" if ylim[1] > 2 else "lower right")
+
+    fig.suptitle(
+        "Evaluation E1: Subject-Independent LOSO Benchmark Across 37 Real Subjects (68 Wearable Sessions)\n"
+        "[PhysioNet_STRESS n=36 | PhysioNet_EXERCISE n=32 | Pooled n=37]",
+        fontsize=11,
+        fontweight="bold",
+    )
+    fig.tight_layout()
+    fig.savefig(fig_dir / "fig1_loso_model_comparison.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_fig2_ablations(tables_dir: Path, fig_dir: Path) -> None:
+    """Plot E3 36-Subject Sensor Modality (with 95% CI), Normalization, Window & Cohort Ablations."""
+    df = pd.read_csv(tables_dir / "sensor_window_ablations_e3.csv")
+    fig, axes = plt.subplots(1, 2, figsize=(14.5, 5.6), dpi=300)
+
+    # Panel A: Sensor modality ablation for M1 Random Forest (with 95% Bootstrap CIs)
+    df_sens = df[(df["ablation_type"] == "sensor_modality") & (df["model"] == "m1_random_forest")]
+    if not df_sens.empty:
+        y_pos = np.arange(len(df_sens))
+        f1 = df_sens["macro_f1_mean"].values
+        err_low = np.maximum(0, f1 - df_sens["macro_f1_95ci_lower"].values)
+        err_high = np.maximum(0, df_sens["macro_f1_95ci_upper"].values - f1)
+
+        bars1 = axes[0].barh(
+            y_pos - 0.18,
+            f1,
+            height=0.35,
+            xerr=[err_low, err_high],
+            capsize=3,
+            label="Macro-F1 (±95% CI)",
+            color="#1f77b4",
+            edgecolor="black",
+            linewidth=0.6,
+        )
+        axes[0].barh(
+            y_pos + 0.18,
+            df_sens["roc_auc_mean"].values,
+            height=0.35,
+            label="ROC-AUC",
+            color="#ff7f0e",
+            edgecolor="black",
+            linewidth=0.6,
+        )
+        for bar, val in zip(bars1, f1):
+            axes[0].text(val + 0.065, bar.get_y() + bar.get_height() / 2, f"{val:.4f}", va="center", fontsize=7.5, fontweight="bold")
+
+        labels_a = [
+            f"{row['configuration']}\n({int(row['n_features'])} feats, n={int(row['n_subjects'])})"
+            for _, row in df_sens.iterrows()
+        ]
+        axes[0].set_yticks(y_pos)
+        axes[0].set_yticklabels(labels_a, fontsize=8)
+        axes[0].set_xlim(0.0, 0.95)
+        axes[0].set_xlabel("Score (Full 36-Subject PhysioNet_STRESS LOSO)", fontsize=9, fontweight="bold")
+        axes[0].set_title("(A) Sensor Subset & 21-vs-26 Feature Ablation\n[Note Overlapping 95% CIs & Minimal TEMP/ACC Gain]", fontsize=9.5, fontweight="bold")
+        axes[0].grid(axis="x", linestyle="--", alpha=0.45)
+        axes[0].legend(fontsize=8, loc="lower right")
+
+    # Panel B: Window Duration, Normalization Strategy & Cohort Sensitivity (M1 Random Forest)
+    df_other = df[
+        (df["ablation_type"].isin(["window_duration", "normalization_strategy", "protocol_cohort_sensitivity"]))
+        & (df["model"] == "m1_random_forest")
+    ]
+    if not df_other.empty:
+        labels_b = [f"{r['ablation_type'].split('_')[0].upper()}: {r['configuration']} (n={int(r['n_subjects'])})" for _, r in df_other.iterrows()]
+        y_pos2 = np.arange(len(df_other))
+        f1_b = df_other["macro_f1_mean"].values
+        bars2 = axes[1].barh(y_pos2 - 0.18, f1_b, height=0.35, label="Macro-F1", color="#2ca02c", edgecolor="black", linewidth=0.6)
+        axes[1].barh(y_pos2 + 0.18, df_other["roc_auc_mean"].values, height=0.35, label="ROC-AUC", color="#9467bd", edgecolor="black", linewidth=0.6)
+        for bar, val in zip(bars2, f1_b):
+            axes[1].text(val + 0.015, bar.get_y() + bar.get_height() / 2, f"{val:.4f}", va="center", fontsize=7.5, fontweight="bold")
+
+        axes[1].set_yticks(y_pos2)
+        axes[1].set_yticklabels(labels_b, fontsize=7.8)
+        axes[1].set_xlim(0.0, 0.95)
+        axes[1].set_xlabel("Score (PhysioNet_STRESS LOSO)", fontsize=9, fontweight="bold")
+        axes[1].set_title("(B) Window Length, Subject Calibration & Protocol Cohort Ablations\n[Resting-Prefix=0.6544 vs Oracle=0.7025 | S* Cohort=0.6776 vs f* Cohort=0.6347]", fontsize=9, fontweight="bold")
+        axes[1].grid(axis="x", linestyle="--", alpha=0.45)
+        axes[1].legend(fontsize=8, loc="lower right")
+
+    fig.suptitle(
+        "Evaluation E3: Sensor Modality, Feature Interaction (21 vs 26), Calibration & Cohort Ablations",
+        fontsize=11,
+        fontweight="bold",
+    )
+    fig.tight_layout()
+    fig.savefig(fig_dir / "fig2_sensor_and_normalization_ablations.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_fig3_contextual_fusion(tables_dir: Path, fig_dir: Path) -> None:
+    """Plot Phase 2 Next-Day CPCB AQI Forecast Benchmark + Contextual Risk Fusion Scenarios."""
+    df = pd.read_csv(tables_dir / "phase2_contextual_fusion_demo.csv")
+    fig, axes = plt.subplots(1, 2, figsize=(15.5, 5.2), dpi=300, gridspec_kw={"width_ratios": [1.0, 1.85]})
+
+    # Panel A: Next-Day (t+1) AQI Forecast vs Same-Day Persistence Baseline on Real city_day.csv
+    row0 = df.iloc[0]
+    metrics_names = ["Macro-F1\n(Test n=5,161d)", "Balanced Acc\n(Test n=5,161d)", "ROC-AUC\n(Test n=5,161d)"]
+    hgb_scores = [
+        float(row0["aqi_hazard_macro_f1"]),
+        float(row0["aqi_hazard_balanced_accuracy"]),
+        float(row0["aqi_hazard_roc_auc"]),
+    ]
+    pers_scores = [
+        float(row0["persistence_baseline_macro_f1"]),
+        float(row0["persistence_baseline_balanced_acc"]),
+        float(row0["persistence_baseline_balanced_acc"]),
+    ]
+    x_a = np.arange(len(metrics_names))
+    b1 = axes[0].bar(x_a - 0.18, hgb_scores, width=0.34, label="HistGradBoost Next-Day (t+1) Forecast", color="#00796b", edgecolor="black")
+    b2 = axes[0].bar(x_a + 0.18, pers_scores, width=0.34, label="Naive Persistence Baseline (y_hat_t+1 = y_t)", color="#b0bec5", edgecolor="black")
+    for bar in list(b1) + list(b2):
+        axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01, f"{bar.get_height():.4f}", ha="center", fontsize=7.5, fontweight="bold")
+    axes[0].set_xticks(x_a)
+    axes[0].set_xticklabels(metrics_names, fontsize=8.5)
+    axes[0].set_ylim(0.75, 1.03)
+    axes[0].set_ylabel("Chronological Test Score (26 Indian Cities)", fontsize=9, fontweight="bold")
+    axes[0].set_title("(A) Real CPCB India city_day.csv (2015-2020)\nNext-Day Hazard (AQI_t+1 > 200) Forecast", fontsize=9.5, fontweight="bold")
+    axes[0].grid(axis="y", linestyle="--", alpha=0.45)
+    axes[0].legend(fontsize=7.8, loc="lower right")
+
+    # Panel B: Contextual Fusion Scenarios (including Ambient Heat >= 38C and Real OOF S01 Scenarios)
+    x = np.arange(len(df))
+    colors = [
+        "#4caf50" if lvl == 0 else ("#ffb300" if lvl == 1 else ("#fb8c00" if lvl == 2 else "#e53935"))
+        for lvl in df["alert_level"]
+    ]
+
+    bars = axes[1].bar(x, df["composite_risk_score"], color=colors, width=0.58, edgecolor="black", linewidth=0.8)
+    for bar, (_, row) in zip(bars, df.iterrows()):
+        axes[1].text(
+            bar.get_x() + bar.get_width() / 2.0,
+            bar.get_height() + 0.018,
+            f"{row['alert_name']}\n(AQI={int(row['ambient_aqi'])}, T={row['ambient_temp_c']:.0f}°C)",
+            ha="center",
+            va="bottom",
+            fontsize=6.8,
+            fontweight="bold",
+        )
+
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels([s.replace("_", "\n") for s in df["scenario_id"]], fontsize=7.2)
+    axes[1].set_ylim(0.0, 1.12)
+    axes[1].set_ylabel("Composite Risk Score [0 - 1]", fontsize=9, fontweight="bold")
+    axes[1].set_title(
+        "(B) Multimodal Contextual Risk Engine (Wearable Strain + Next-Day AQI + Ambient Heat >= 38°C)\n"
+        "[S7 & S8 Driven by Real Out-of-Fold LOSO Subject S01 Predictions + Real Delhi/Mumbai Test Split]",
+        fontsize=9.2,
+        fontweight="bold",
+    )
+    axes[1].grid(axis="y", linestyle="--", alpha=0.45)
+
+    fig.suptitle("Phase 2: Causal Next-Day Environmental Hazard Forecasting & Multimodal Alert Escalation", fontsize=11, fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(fig_dir / "fig3_contextual_fusion_matrix.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_fig4_federated(tables_dir: Path, fig_dir: Path) -> None:
+    """Plot Phase 3 Federated Learning accuracy vs float32/int8 communication cost."""
+    df = pd.read_csv(tables_dir / "phase3_federated_benchmark.csv")
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.2), dpi=300)
+
+    x = np.arange(len(df))
+    b1 = axes[0].bar(x - 0.18, df["macro_f1_mean"], width=0.35, label="Macro-F1", color="#1976d2", edgecolor="black", linewidth=0.6)
+    b2 = axes[0].bar(x + 0.18, df["roc_auc_mean"], width=0.35, label="ROC-AUC", color="#00897b", edgecolor="black", linewidth=0.6)
+    for bar in list(b1) + list(b2):
+        axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.012, f"{bar.get_height():.3f}", ha="center", fontsize=6.8, fontweight="bold")
+
+    labels = [f"{r['algorithm'].replace('_', ' ')}\n(n={int(r['n_subjects'])}, c/r={int(r['clients_per_round'])})" for _, r in df.iterrows()]
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(labels, fontsize=7, rotation=18, ha="right")
+    axes[0].set_ylim(0.0, 0.95)
+    axes[0].set_ylabel("Subject-Independent Score", fontsize=9, fontweight="bold")
+    axes[0].set_title("(A) 36-Subject Tabular LogReg vs. 12-Subject 1D-CNN\n[Tabular FL Matches Centralized; 12-Sub CNN Fails to Converge]", fontsize=9.2, fontweight="bold")
+    axes[0].grid(axis="y", linestyle="--", alpha=0.45)
+    axes[0].legend(fontsize=8, loc="upper right")
+
+    df_comm = df[df["total_comm_float32_kb"] > 0].copy()
+    xc = np.arange(len(df_comm))
+    c1 = axes[1].bar(xc - 0.18, df_comm["total_comm_float32_kb"], width=0.35, label="Float32 Traffic (KB)", color="#e64a19", edgecolor="black", linewidth=0.6)
+    c2 = axes[1].bar(xc + 0.18, df_comm["total_comm_int8_kb"], width=0.35, label="Int8 Quantized Traffic (KB)", color="#512da8", edgecolor="black", linewidth=0.6)
+    for bar in list(c1) + list(c2):
+        axes[1].text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.12, f"{bar.get_height():.1f} KB", ha="center", fontsize=7, fontweight="bold")
+
+    axes[1].set_yscale("log")
+    axes[1].set_xticks(xc)
+    axes[1].set_xticklabels([a.replace("_", "\n") for a in df_comm["algorithm"]], fontsize=7.5)
+    axes[1].set_ylim(1.0, 25000.0)
+    axes[1].set_ylabel("Total Uplink + Downlink Traffic (KB, Log Scale)", fontsize=9, fontweight="bold")
+    axes[1].set_title("(B) Total 20-Round Communication Overhead\n[Tabular LogReg Int8 Requires Only 8.86 - 14.77 KB]", fontsize=9.2, fontweight="bold")
+    axes[1].grid(axis="y", linestyle="--", alpha=0.45)
+    axes[1].legend(fontsize=8, loc="upper left")
+
+    fig.suptitle("Phase 3: Privacy-Preserving Federated Learning Benchmark on PhysioNet_STRESS", fontsize=11, fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(fig_dir / "fig4_federated_comm_vs_f1.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_fig5_cross_protocol_transfer(tables_dir: Path, fig_dir: Path) -> None:
+    """Plot E2 Cross-Protocol Domain Generalization vs Within-Dataset LOSO."""
+    df_e1 = pd.read_csv(tables_dir / "loso_benchmark_e1.csv")
+    df_e2 = pd.read_csv(tables_dir / "cross_dataset_transfer_e2.csv")
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.0), dpi=300)
+    models = ["m0_logistic_regression", "m1_decision_tree", "m1_random_forest", "m1_hist_gradient_boosting", "m2_cnn_1d"]
+    short_names = ["M0 LogReg", "M1 DecTree", "M1 RandForest", "M1 HistGB", "M2 1D-CNN"]
+    x = np.arange(len(models))
+    width = 0.34
+
+    # Panel A: Target = EXERCISE (Within-Dataset LOSO vs Cross-Protocol STRESS -> EXERCISE)
+    e1_ex = df_e1[df_e1["dataset"] == "PhysioNet_EXERCISE"].set_index("model").reindex(models)
+    e2_s2e = df_e2[df_e2["direction"] == "PhysioNet_STRESS->PhysioNet_EXERCISE"].set_index("model").reindex(models)
+
+    b1 = axes[0].bar(x - width / 2, e1_ex["macro_f1_mean"], width, label="Within-Cohort LOSO (EXERCISE -> EXERCISE)", color="#2ca02c", edgecolor="black")
+    b2 = axes[0].bar(x + width / 2, e2_s2e["macro_f1_mean"], width, label="Zero-Shot Transfer (STRESS -> EXERCISE)", color="#d62728", edgecolor="black")
+    for bar in list(b1) + list(b2):
+        axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.015, f"{bar.get_height():.3f}", ha="center", fontsize=7.5, fontweight="bold")
+    axes[0].axhline(0.2024, color="#d62728", linestyle=":", linewidth=1.2, label="All-Baseline Collapse (0.2024)")
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(short_names, fontsize=8.5)
+    axes[0].set_ylim(0.0, 1.05)
+    axes[0].set_ylabel("Target Macro-F1", fontsize=9, fontweight="bold")
+    axes[0].set_title("(A) Evaluating on PhysioNet_EXERCISE (n=32)\n[Zero-Shot Models Trained on Stress Collapse to Baseline]", fontsize=9.5, fontweight="bold")
+    axes[0].grid(axis="y", linestyle="--", alpha=0.45)
+    axes[0].legend(fontsize=8, loc="upper right")
+
+    # Panel B: Target = STRESS (Within-Dataset LOSO vs Cross-Protocol EXERCISE -> STRESS)
+    e1_st = df_e1[df_e1["dataset"] == "PhysioNet_STRESS"].set_index("model").reindex(models)
+    e2_e2s = df_e2[df_e2["direction"] == "PhysioNet_EXERCISE->PhysioNet_STRESS"].set_index("model").reindex(models)
+
+    b3 = axes[1].bar(x - width / 2, e1_st["macro_f1_mean"], width, label="Within-Cohort LOSO (STRESS -> STRESS)", color="#1f77b4", edgecolor="black")
+    b4 = axes[1].bar(x + width / 2, e2_e2s["macro_f1_mean"], width, label="Zero-Shot Transfer (EXERCISE -> STRESS)", color="#ff7f0e", edgecolor="black")
+    for bar in list(b3) + list(b4):
+        axes[1].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.015, f"{bar.get_height():.3f}", ha="center", fontsize=7.5, fontweight="bold")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(short_names, fontsize=8.5)
+    axes[1].set_ylim(0.0, 1.05)
+    axes[1].set_ylabel("Target Macro-F1", fontsize=9, fontweight="bold")
+    axes[1].set_title("(B) Evaluating on PhysioNet_STRESS (n=36)\n[Exertion-Trained Models Reach Only 0.45 - 0.52 Macro-F1]", fontsize=9.5, fontweight="bold")
+    axes[1].grid(axis="y", linestyle="--", alpha=0.45)
+    axes[1].legend(fontsize=8, loc="upper right")
+
+    fig.suptitle(
+        "Evaluation E2: Cross-Protocol Domain Shift — Psychological Stress vs. Physical Exertion Are Distinct Signals",
+        fontsize=11,
+        fontweight="bold",
+    )
+    fig.tight_layout()
+    fig.savefig(fig_dir / "fig5_cross_protocol_transfer_heatmap.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_fig6_edge_quantization(tables_dir: Path, fig_dir: Path) -> None:
+    """Plot Multi-Model Edge Quantization Profile (Float32 vs Int8 Size, Held-Out Macro-F1, and Latency)."""
+    df = pd.read_csv(tables_dir / "edge_profile_m2.csv")
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.8), dpi=300)
+
+    x = np.arange(len(df))
+    labels = [m.replace("_", "\n") for m in df["model"]]
+
+    # Panel A: Float32 vs Int8 Model Footprint (KB, Log Scale)
+    b1 = axes[0].bar(x - 0.18, df["float_size_kb"], width=0.35, label="Float32 Footprint (KB)", color="#fb8c00", edgecolor="black")
+    b2 = axes[0].bar(x + 0.18, df["int8_size_kb"], width=0.35, label="Int8 Footprint (KB)", color="#1e88e5", edgecolor="black")
+    for bar, (_, r) in zip(b2, df.iterrows()):
+        axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.18, f"{r['int8_size_kb']:.2f}K\n({r['compression_ratio']:.1f}x)", ha="center", fontsize=6.8, fontweight="bold")
+    axes[0].set_yscale("log")
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(labels, fontsize=8)
+    axes[0].set_ylim(0.02, 2000.0)
+    axes[0].set_ylabel("Memory Footprint (KB, Log Scale)", fontsize=9, fontweight="bold")
+    axes[0].set_title("(A) Model Footprint & Compression Ratio\n[M0=0.05 KB (18.2x) | M2 CNN=12.88 KB (4.3x)]", fontsize=9.2, fontweight="bold")
+    axes[0].grid(axis="y", linestyle="--", alpha=0.45)
+    axes[0].legend(fontsize=8, loc="upper left")
+
+    # Panel B: Held-Out Subject Split Accuracy (Float32 vs Int8 Macro-F1)
+    b3 = axes[1].bar(x - 0.18, df["float_macro_f1"], width=0.35, label="Float32 Held-Out Macro-F1", color="#43a047", edgecolor="black")
+    b4 = axes[1].bar(x + 0.18, df["int8_macro_f1"], width=0.35, label="Int8 Held-Out Macro-F1", color="#00acc1", edgecolor="black")
+    for bar in b4:
+        axes[1].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.012, f"{bar.get_height():.4f}", ha="center", fontsize=7.2, fontweight="bold")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(labels, fontsize=8)
+    axes[1].set_ylim(0.50, 1.02)
+    axes[1].set_ylabel("Held-Out Test Macro-F1 (9 Subjects, 758 Win)", fontsize=9, fontweight="bold")
+    axes[1].set_title("(B) Post-Training Quantization Fidelity\n[Zero/Negligible F1 Drop (|ΔF1| <= 0.0010)]", fontsize=9.2, fontweight="bold")
+    axes[1].grid(axis="y", linestyle="--", alpha=0.45)
+    axes[1].legend(fontsize=8, loc="lower right")
+
+    # Panel C: Desktop x86_64 Single-Thread Proxy Latency (p50 & p95 ms)
+    b5 = axes[2].bar(x - 0.18, df["latency_p50_ms"], width=0.35, label="p50 Median Latency (ms)", color="#5e35b1", edgecolor="black")
+    b6 = axes[2].bar(x + 0.18, df["latency_p95_ms"], width=0.35, label="p95 Tail Latency (ms)", color="#e53935", edgecolor="black")
+    for bar in b5:
+        axes[2].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.18, f"{bar.get_height():.2f}ms", ha="center", fontsize=7.2, fontweight="bold")
+    axes[2].set_xticks(x)
+    axes[2].set_xticklabels(labels, fontsize=8)
+    axes[2].set_ylim(0.0, 10.2)
+    axes[2].set_ylabel("Inference Latency per Window (ms)", fontsize=9, fontweight="bold")
+    axes[2].set_title("(C) Desktop x86_64 CPU Proxy Latency\n[Single-Thread Proxy — Not Physical MCU]", fontsize=9.2, fontweight="bold")
+    axes[2].grid(axis="y", linestyle="--", alpha=0.45)
+    axes[2].legend(fontsize=8, loc="upper left")
+
+    fig.suptitle("Phase 1D: Multi-Model Edge Deployment & Int8 Quantization Benchmark (Trained on 28 Subjects, Tested on 9 Subjects)", fontsize=10.8, fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(fig_dir / "fig6_edge_quantization_pareto.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_fig7_architecture_diagram(fig_dir: Path) -> None:
+    """Render a crisp 300-DPI System Architecture & Dataflow Diagram as PNG."""
+    fig, ax = plt.subplots(figsize=(15, 6.2), dpi=300)
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 48)
+    ax.axis("off")
+
+    def draw_box(x: float, y: float, w: float, h: float, title: str, body: str, facecolor: str, edgecolor: str = "#1a237e") -> None:
+        box = mpatches.FancyBboxPatch(
+            (x, y), w, h,
+            boxstyle="round,pad=0.6,rounding_size=1.2",
+            facecolor=facecolor,
+            edgecolor=edgecolor,
+            linewidth=1.5,
+        )
+        ax.add_patch(box)
+        ax.text(x + w / 2, y + h - 2.3, title, ha="center", va="top", fontsize=9.2, fontweight="bold", color="#0d1b2a")
+        ax.text(x + w / 2, y + h / 2 - 1.2, body, ha="center", va="center", fontsize=7.6, color="#1b263b")
+
+    def draw_arrow(x1: float, y1: float, x2: float, y2: float, label: str = "") -> None:
+        ax.annotate(
+            "",
+            xy=(x2, y2),
+            xytext=(x1, y1),
+            arrowprops=dict(arrowstyle="-|>,head_width=0.6,head_length=0.8", lw=1.6, color="#37474f"),
+        )
+        if label:
+            ax.text((x1 + x2) / 2, (y1 + y2) / 2 + 1.1, label, ha="center", va="bottom", fontsize=7.2, fontweight="bold", color="#263238")
+
+    # Title Banner
+    ax.text(
+        50, 45.8,
+        "Edge-Intelligent Personal Health Companion — Three-Phase System Architecture",
+        ha="center", va="center", fontsize=12.5, fontweight="bold", color="#0d1b2a"
+    )
+    ax.text(
+        50, 43.2,
+        "Strict Subject-Independent LOSO (37 Real Subjects, 68 Wearable Sessions) + Real CPCB India Next-Day AQI Forecast (29,531 Daily Records)",
+        ha="center", va="center", fontsize=8.8, color="#37474f"
+    )
+
+    # Row 1: Phase 1 Wearable Edge Pipeline
+    draw_box(
+        2, 24, 19, 15.5,
+        "1. Multimodal Wearable I/O",
+        "Empatica E4 Wrist Sensors\n• BVP (64 Hz)  • EDA (4 Hz)\n• TEMP (4 Hz)  • ACC (32 Hz)\n• 60s Window, 15s Stride\n• Transition Buffer: ±30s",
+        "#e3f2fd", "#1565c0"
+    )
+    draw_arrow(21.6, 31.8, 25.4, 31.8, "60s Windows")
+
+    draw_box(
+        26, 24, 22, 15.5,
+        "2. Feature & Tensor Engine",
+        "• Tabular: 26 Features\n  (21 Base + 5 Autonomic Ratios)\n  Resting-Prefix Z-Score Calib.\n• Raw CNN Tensor: (6, 1920)\n  Resampled at 32 Hz",
+        "#e8f5e9", "#2e7d32"
+    )
+    draw_arrow(48.6, 31.8, 52.4, 31.8, "Zero-Leakage LOSO")
+
+    draw_box(
+        53, 24, 21, 15.5,
+        "3. Edge Strain Models",
+        "• M0 LogReg: 0.05 KB (int8)\n  STRESS F1=0.6658 | EX=0.8881\n• M1 HistGB: 103.6 KB (int8)\n  STRESS F1=0.6616 | EX=0.8941\n• M2 1D-CNN: 12.88 KB (int8)",
+        "#fff3e0", "#ef6c00"
+    )
+    draw_arrow(74.6, 31.8, 78.4, 31.8, "p_phys + K=2 Persist")
+
+    # Row 2: Phase 2 Environmental + Phase 3 Federated
+    draw_box(
+        2, 4, 34, 15.5,
+        "Phase 3: Privacy-Preserving Federated Learning",
+        "• 36-Subject Tabular LogReg (35 Clients/Round)\n  FedAvg (60% Partial): F1=0.6588, AUC=0.8062 (8.86 KB int8)\n  FedProx (μ=0.05): F1=0.6584, AUC=0.8040 (14.77 KB int8)\n• 12-Subject M2 1D-CNN Baseline: F1=0.4361 (Fails to Converge)",
+        "#f3e5f5", "#6a1b9a"
+    )
+    draw_arrow(36.6, 11.8, 53.0, 23.4, "Global Aggregated Weights")
+
+    draw_box(
+        40, 4, 34, 15.5,
+        "Phase 2A: Real CPCB India Next-Day (t+1) AQI Forecast",
+        "• Real city_day.csv (26 Indian Cities, 29,531 Daily Rows)\n• Chronological Split: 20,591 Train Days | 5,161 Test Days\n• Target: Next-Day Severe/Poor Hazard (AQI_{t+1} > 200)\n• Test F1 = 0.9094 | Bal Acc = 0.9315 (+4.18% vs Persistence)",
+        "#e0f2f1", "#00695c"
+    )
+    draw_arrow(74.6, 11.8, 78.4, 18.0, "p_env(t+1) + Temp°C")
+
+    # Right Output Column: Contextual Risk Fusion Engine
+    draw_box(
+        79, 8, 19, 31.5,
+        "4. Contextual Risk\nFusion Engine",
+        "Inputs:\n• Wearable p_phys\n• Persisted Alarm (K=2)\n• Next-Day Hazard p_env\n• Ambient Heat (T >= 38°C)\n\n4-Tier Alert Escalation:\n0: LOW_NORMAL\n1: MODERATE_ADVISORY\n2: HIGH_RISK_ALERT\n3: CRITICAL_EMERGENCY\n\nValidated on Real S01\nOOF + Delhi/Mumbai AQI",
+        "#ffebee", "#c62828"
+    )
+
+    fig.tight_layout()
+    fig.savefig(fig_dir / "fig7_system_architecture_overview.png", dpi=300)
+    plt.close(fig)
+
+
+def main() -> None:
+    tables_dir = Path("results/tables")
+    fig_dir = Path("results/figures")
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    plot_fig1_loso_comparison(tables_dir, fig_dir)
+    plot_fig2_ablations(tables_dir, fig_dir)
+    plot_fig3_contextual_fusion(tables_dir, fig_dir)
+    plot_fig4_federated(tables_dir, fig_dir)
+    plot_fig5_cross_protocol_transfer(tables_dir, fig_dir)
+    plot_fig6_edge_quantization(tables_dir, fig_dir)
+    plot_fig7_architecture_diagram(fig_dir)
+    print(f"[*] Generated 7 publication figures in {fig_dir}")
+
+
+if __name__ == "__main__":
+    main()
 
 `
 
