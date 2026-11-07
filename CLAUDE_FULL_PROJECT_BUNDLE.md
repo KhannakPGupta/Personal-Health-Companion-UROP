@@ -6,7 +6,6 @@
 # Edge-Intelligent Personal Health Companion (UROP Research Benchmark)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Tests: 37 Passed](https://img.shields.io/badge/tests-37%20passed-brightgreen.svg)](#reproducibility--verification)
 [![Dataset: PhysioNet E4](https://img.shields.io/badge/PhysioNet-37%20Subjects%20%7C%2068%20Sessions-006699.svg)](https://physionet.org/content/wearable-device-dataset/1.0.0/)
 [![Dataset: CPCB India AQI](https://img.shields.io/badge/CPCB%20India%20AQI-26%20Cities%20%7C%2029,531%20Days-00897b.svg)](#phase-2-next-day-t1-cpcb-india-aqi-forecasting--contextual-fusion)
