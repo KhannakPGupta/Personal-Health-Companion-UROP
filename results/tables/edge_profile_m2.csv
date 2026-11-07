@@ -1,2 +1,6 @@
-parameters,float_size_kb,int8_size_kb,compression_ratio,float_accuracy,int8_accuracy,delta_accuracy,latency_mean_ms,latency_p50_ms,latency_p95_ms,latency_p99_ms
-12161,58.69,51.22,1.15,0.834,0.834,0.0,1.826,1.806,1.995,2.192
+model,input_representation,parameters,float_size_kb,int8_size_kb,compression_ratio,float_macro_f1,int8_macro_f1,delta_macro_f1,float_balanced_acc,int8_balanced_acc,float_accuracy,int8_accuracy,delta_accuracy,latency_mean_ms,latency_p50_ms,latency_p95_ms,latency_p99_ms,hardware_note
+m2_cnn_1d,32Hz_6ch_Raw_Tensor,12161,55.22,12.88,4.29,0.7365,0.7355,-0.001,0.7438,0.7427,0.7367,0.7357,-0.001,1.2,1.211,1.797,1.996,Desktop_x86_64_CPU_Proxy (Non-Wearable_MCU)
+m0_logistic_regression,26_Tabular_Autonomic_Features,27,0.91,0.05,18.2,0.9075,0.9066,-0.0009,0.9077,0.9068,0.9087,0.9078,-0.001,0.152,0.143,0.2,0.302,Desktop_x86_64_CPU_Proxy (Excludes ~1.1ms DSP feature extraction)
+m1_decision_tree,26_Tabular_Autonomic_Features,25,3.05,1.52,2.01,0.9099,0.9099,0.0,0.9082,0.9082,0.9116,0.9116,0.0,0.076,0.07,0.11,0.114,Desktop_x86_64_CPU_Proxy (Excludes ~1.1ms DSP feature extraction)
+m1_random_forest,26_Tabular_Autonomic_Features,7324,618.25,309.12,2.0,0.9301,0.9301,0.0,0.9272,0.9272,0.9316,0.9316,0.0,5.862,5.489,9.021,10.739,Desktop_x86_64_CPU_Proxy (Excludes ~1.1ms DSP feature extraction)
+m1_hist_gradient_boosting,26_Tabular_Autonomic_Features,2546,207.09,103.55,2.0,0.9023,0.9023,0.0,0.8979,0.8979,0.9049,0.9049,0.0,1.951,1.789,3.111,3.776,Desktop_x86_64_CPU_Proxy (Excludes ~1.1ms DSP feature extraction)

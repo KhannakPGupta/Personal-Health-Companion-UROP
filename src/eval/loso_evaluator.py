@@ -73,6 +73,7 @@ def run_loso_evaluation(
     dataset_name: str = "WESAD",
     random_seed: int = 42,
     use_subject_session_calibration: bool = True,
+    include_interaction_features: bool = True,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Execute LOSO cross-validation across all unique subjects in df_features.
     
@@ -83,21 +84,22 @@ def run_loso_evaluation(
         dataset_name: Label for tracking ('WESAD', 'PhysioNet', 'Pooled').
         random_seed: Seed for stochastic classifiers.
         use_subject_session_calibration: If True, applies label-free UnsupervisedSubjectSessionCalibrator.
+        include_interaction_features: If True, includes sensor-matched autonomic interaction features.
         
     Returns:
         Tuple of (per_subject_results_df, overall_summary_dict).
     """
-    df_aug = augment_autonomic_features(df_features)
-    extra_cols = [
-        c for c in [
-            "sympathovagal_ratio",
-            "hr_dynamic_range",
-            "eda_arousal_index",
-            "eda_phasic_tonic_ratio",
-            "motion_adjusted_hr",
-        ]
-        if c in df_aug.columns and len(feature_cols) >= 10
-    ]
+    df_aug = augment_autonomic_features(df_features) if include_interaction_features else df_features.copy()
+    extra_cols: List[str] = []
+    if include_interaction_features:
+        if "hr_mean" in feature_cols and "hrv_rmssd" in feature_cols:
+            extra_cols.extend(["sympathovagal_ratio", "hr_dynamic_range"])
+        if "eda_phasic_peaks" in feature_cols and "eda_tonic_level" in feature_cols:
+            extra_cols.extend(["eda_arousal_index", "eda_phasic_tonic_ratio"])
+        if "hr_mean" in feature_cols and "high_motion_fraction" in feature_cols:
+            extra_cols.append("motion_adjusted_hr")
+        extra_cols = [c for c in extra_cols if c in df_aug.columns]
+
     active_feature_cols = list(dict.fromkeys([c for c in feature_cols if c in df_aug.columns] + extra_cols))
 
     if use_subject_session_calibration and "subject_id" in df_aug.columns:
@@ -214,6 +216,10 @@ def run_loso_evaluation(
     summary = {
         "dataset": dataset_name,
         "model": model_name,
+        "n_subjects": int(len(res_df)),
+        "n_features": int(len(active_feature_cols)),
+        "median_windows_per_subject": int(res_df["n_windows"].median()),
+        "min_windows_per_subject": int(res_df["n_windows"].min()),
         "macro_f1_mean": round(float(res_df["macro_f1"].mean()), 4),
         "macro_f1_std": round(float(res_df["macro_f1"].std()), 4),
         "macro_f1_worst": round(float(res_df["macro_f1"].min()), 4),
@@ -222,6 +228,7 @@ def run_loso_evaluation(
         "roc_auc_mean": round(float(res_df["roc_auc"].mean()), 4),
         "ece_mean": round(float(res_df["ece"].mean()), 4),
         "false_alerts_persisted_mean": round(float(res_df["false_alerts_persisted_per_hr"].mean()), 2),
+        "false_alarm_episodes_mean": round(float(res_df["false_alarm_episodes_per_hr"].mean()), 2),
     }
 
     # 1,000 bootstrap confidence intervals over subject scores
@@ -238,7 +245,7 @@ def run_cnn_loso_evaluation(
     subject_ids: np.ndarray,
     dataset_name: str = "WESAD",
     epochs: int = 20,
-    batch_size: int = 32,
+    batch_size: int = 128,
     patience: int = 5,
     random_seed: int = 42,
     active_channels: Optional[List[int]] = None,
@@ -347,6 +354,10 @@ def run_cnn_loso_evaluation(
     summary = {
         "dataset": dataset_name,
         "model": "m2_cnn_1d",
+        "n_subjects": int(len(res_df)),
+        "n_features": int(in_channels),
+        "median_windows_per_subject": int(res_df["n_windows"].median()),
+        "min_windows_per_subject": int(res_df["n_windows"].min()),
         "macro_f1_mean": round(float(res_df["macro_f1"].mean()), 4),
         "macro_f1_std": round(float(res_df["macro_f1"].std(ddof=0)), 4),
         "macro_f1_worst": round(float(res_df["macro_f1"].min()), 4),
@@ -355,6 +366,7 @@ def run_cnn_loso_evaluation(
         "roc_auc_mean": round(float(res_df["roc_auc"].mean()), 4),
         "ece_mean": round(float(res_df["ece"].mean()), 4),
         "false_alerts_persisted_mean": round(float(res_df["false_alerts_persisted_per_hr"].mean()), 2),
+        "false_alarm_episodes_mean": round(float(res_df["false_alarm_episodes_per_hr"].mean()), 2),
     }
     _, ci_low, ci_high = bootstrap_subject_confidence_intervals(per_subject_rows, metric_name="macro_f1")
     summary["macro_f1_95ci_lower"] = round(ci_low, 4)

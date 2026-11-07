@@ -194,10 +194,10 @@ def run_normalization_ablation(
     if global_summary:
         global_summary["ablation_type"] = "normalization_strategy"
         global_summary["configuration"] = "GlobalZScore_TrainFoldOnly"
-        global_summary["n_features_or_channels"] = len(feat_cols)
+        global_summary["n_features_or_channels"] = global_summary["n_features"]
         rows.append(global_summary)
 
-    # 2. Unsupervised resting-prefix & session calibration (Primary Label-Free)
+    # 2. Unsupervised resting-prefix & session calibration (Primary Label-Free, assumes initial resting prefix)
     _, unsup_summary = run_loso_evaluation(
         df_features=df_features,
         model_name=tabular_model,
@@ -208,10 +208,10 @@ def run_normalization_ablation(
     if unsup_summary:
         unsup_summary["ablation_type"] = "normalization_strategy"
         unsup_summary["configuration"] = "UnsupervisedRestingPrefixCalibrated"
-        unsup_summary["n_features_or_channels"] = len(feat_cols)
+        unsup_summary["n_features_or_channels"] = unsup_summary["n_features"]
         rows.append(unsup_summary)
 
-    # 3. Per-subject resting baseline normalization (Sensitivity)
+    # 3. Per-subject ground-truth baseline normalization (ORACLE Upper Bound: uses test label==0)
     sub_norm = PerSubjectBaselineNormalizer(feature_cols=feat_cols)
     df_per_sub = sub_norm.normalize(df_features, label_col="label")
     _, sub_summary = run_loso_evaluation(
@@ -223,10 +223,40 @@ def run_normalization_ablation(
     )
     if sub_summary:
         sub_summary["ablation_type"] = "normalization_strategy"
-        sub_summary["configuration"] = "PerSubjectBaselineCalibrated"
-        sub_summary["n_features_or_channels"] = len(feat_cols)
+        sub_summary["configuration"] = "PerSubjectBaseline_Oracle"
+        sub_summary["n_features_or_channels"] = sub_summary["n_features"]
         rows.append(sub_summary)
 
+    return pd.DataFrame(rows)
+
+
+def run_protocol_cohort_ablation(
+    df_stress: pd.DataFrame,
+    dataset_name: str = "PhysioNet_STRESS",
+    tabular_model: str = "m1_random_forest",
+) -> pd.DataFrame:
+    """Compare PhysioNet Stress Protocol S (v1, 18 subjects) vs Protocol f (v2, 18 subjects) vs Combined (36 subjects)."""
+    rows = []
+    feat_cols = [c for c in TABULAR_FEATURE_COLS if c in df_stress.columns]
+    cohorts = [
+        ("Protocol_S_v1_18subs", df_stress[df_stress["subject_id"].astype(str).str.startswith("S")].reset_index(drop=True)),
+        ("Protocol_f_v2_18subs", df_stress[df_stress["subject_id"].astype(str).str.startswith("f")].reset_index(drop=True)),
+        ("Combined_All36_subs", df_stress),
+    ]
+    for cfg_name, df_sub in cohorts:
+        if len(df_sub) == 0:
+            continue
+        _, summary = run_loso_evaluation(
+            df_features=df_sub,
+            model_name=tabular_model,
+            feature_cols=feat_cols,
+            dataset_name=dataset_name,
+        )
+        if summary:
+            summary["ablation_type"] = "protocol_cohort_sensitivity"
+            summary["configuration"] = cfg_name
+            summary["n_features_or_channels"] = summary["n_features"]
+            rows.append(summary)
     return pd.DataFrame(rows)
 
 
@@ -296,8 +326,8 @@ def main() -> None:
         ten_all_30 = np.load(ten_30_path)["tensors"]
 
         # Disjoint subject + protocol cohorts for zero-leakage Cross-Protocol Transfer (E2):
-        # Cohort A: STRESS protocol, subjects 'f*'
-        # Cohort B: EXERCISE protocol (AEROBIC/ANAEROBIC), subjects 'S*'
+        # Cohort A: STRESS protocol, subjects 'f*' (18 subjects)
+        # Cohort B: EXERCISE protocol (AEROBIC/ANAEROBIC), subjects 'S*' (18 subjects)
         mask_src = ((df_all_60["session"] == "STRESS") & (df_all_60["subject_id"].str.startswith("f"))).values
         mask_tgt = ((df_all_60["session"].isin(["AEROBIC", "ANAEROBIC"])) & (df_all_60["subject_id"].str.startswith("S"))).values
 
@@ -306,11 +336,18 @@ def main() -> None:
         physio_60 = df_all_60[mask_tgt].reset_index(drop=True)
         physio_ten_60 = ten_all_60[mask_tgt]
 
-        mask_src_30 = ((df_all_30["session"] == "STRESS") & (df_all_30["subject_id"].str.startswith("f"))).values
-        wesad_30 = df_all_30[mask_src_30].reset_index(drop=True)
-        wesad_ten_30 = ten_all_30[mask_src_30]
+        # Full 36-subject PhysioNet_STRESS cohort for E3 Ablations (matches E1 loso_benchmark_e1.csv exactly)
+        mask_stress_all_60 = (df_all_60["session"] == "STRESS").values
+        stress_all_60 = df_all_60[mask_stress_all_60].reset_index(drop=True)
+        stress_ten_all_60 = ten_all_60[mask_stress_all_60]
+
+        mask_stress_all_30 = (df_all_30["session"] == "STRESS").values
+        stress_all_30 = df_all_30[mask_stress_all_30].reset_index(drop=True)
+        stress_ten_all_30 = ten_all_30[mask_stress_all_30]
+
         src_label = "PhysioNet_STRESS"
         tgt_label = "PhysioNet_EXERCISE"
+        is_real_physio = True
     else:
         wesad_60, wesad_ten_60 = generate_synthetic_cohort(
             "WESAD", [f"S{i}" for i in [2, 3, 4, 5, 6, 7]], windows_per_subject=16, seq_len=1920, seed=42
@@ -318,11 +355,13 @@ def main() -> None:
         physio_60, physio_ten_60 = generate_synthetic_cohort(
             "PhysioNet", [f"P{i:02d}" for i in range(1, 7)], windows_per_subject=16, seq_len=1920, seed=101
         )
-        wesad_30, wesad_ten_30 = generate_synthetic_cohort(
+        stress_all_60, stress_ten_all_60 = wesad_60, wesad_ten_60
+        stress_all_30, stress_ten_all_30 = generate_synthetic_cohort(
             "WESAD", [f"S{i}" for i in [2, 3, 4, 5, 6, 7]], windows_per_subject=32, seq_len=960, seed=202
         )
         src_label = "WESAD"
         tgt_label = "PhysioNet"
+        is_real_physio = False
 
     # 1. Cross-Dataset / Cross-Protocol Generalization (Evaluation E2)
     transfer_rows = []
@@ -358,15 +397,20 @@ def main() -> None:
     transfer_csv = args.out_dir / "cross_dataset_transfer_e2.csv"
     df_transfer.to_csv(transfer_csv, index=False)
 
-    # 2. Sensor, Window, Normalization & Label Sensitivity Ablations (Evaluation E3)
-    df_sensor = run_sensor_modality_ablation(wesad_60, wesad_ten_60, dataset_name=src_label, cnn_epochs=args.cnn_epochs)
-    df_window = run_window_length_ablation(
-        wesad_60, wesad_ten_60, wesad_30, wesad_ten_30, dataset_name=src_label, cnn_epochs=args.cnn_epochs
+    # 2. Sensor, Window, Normalization & Cohort Sensitivity Ablations (Evaluation E3 on full 36-subject Stress cohort)
+    df_sensor = run_sensor_modality_ablation(
+        stress_all_60, stress_ten_all_60, dataset_name=src_label, cnn_epochs=args.cnn_epochs
     )
-    df_norm = run_normalization_ablation(wesad_60, dataset_name=src_label)
-    df_amuse = run_amusement_sensitivity_ablation(wesad_60, dataset_name=src_label)
+    df_window = run_window_length_ablation(
+        stress_all_60, stress_ten_all_60, stress_all_30, stress_ten_all_30, dataset_name=src_label, cnn_epochs=args.cnn_epochs
+    )
+    df_norm = run_normalization_ablation(stress_all_60, dataset_name=src_label)
+    if is_real_physio:
+        df_cohort = run_protocol_cohort_ablation(stress_all_60, dataset_name=src_label)
+    else:
+        df_cohort = run_amusement_sensitivity_ablation(stress_all_60, dataset_name=src_label)
 
-    df_ablations = pd.concat([df_sensor, df_window, df_norm, df_amuse], ignore_index=True)
+    df_ablations = pd.concat([df_sensor, df_window, df_norm, df_cohort], ignore_index=True)
     ablation_csv = args.out_dir / "sensor_window_ablations_e3.csv"
     df_ablations.to_csv(ablation_csv, index=False)
 

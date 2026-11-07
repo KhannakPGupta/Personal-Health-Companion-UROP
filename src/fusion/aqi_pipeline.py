@@ -115,73 +115,166 @@ def estimate_aqi_from_pollutants(row: pd.Series) -> float:
 
 
 class AmbientAQIPredictor:
-    """Train-split-enclosed CPCB AQI hazard classifier (predicts AQI > 200: Poor to Severe)."""
+    """Chronological Next-Day (t+1) CPCB AQI Hazard Forecaster (predicts AQI_{t+1} > 200 from day-t pollutants)."""
 
     def __init__(self, feature_cols: Optional[List[str]] = None, random_state: int = 42):
-        self.feature_cols = feature_cols or POLLUTANT_COLS
+        self.base_cols = feature_cols or POLLUTANT_COLS
+        self.feature_cols = list(self.base_cols) + ["PM2.5_roll3", "PM10_roll3", "PM2.5_diff1"]
         self.random_state = random_state
         self.medians_: Dict[str, float] = {}
         self.clf = RandomForestClassifier(
-            n_estimators=100,
+            n_estimators=120,
             max_depth=6,
+            min_samples_leaf=5,
             class_weight="balanced",
             random_state=random_state,
+            n_jobs=-1,
         )
         self.is_fitted = False
 
-    def fit(self, df_train: pd.DataFrame) -> "AmbientAQIPredictor":
-        """Fit medians and classifier strictly on chronological training split."""
-        df_proc = df_train.copy()
-        for col in self.feature_cols:
+    def _prepare_causal_features_and_next_day_target(
+        self, df: pd.DataFrame, is_train: bool = False
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Compute causal day-t features (with 3-day rolling lags) and next-day (t+1) binary hazard target."""
+        df_proc = df.copy()
+        sort_cols = [c for c in ["City", "Date", "DayIndex"] if c in df_proc.columns]
+        if sort_cols:
+            df_proc = df_proc.sort_values(sort_cols).copy()
+
+        for col in self.base_cols:
             if col in df_proc.columns:
-                med = float(df_proc[col].median())
-                self.medians_[col] = med if pd.notna(med) else 0.0
-                df_proc[col] = df_proc[col].fillna(self.medians_[col])
+                if is_train:
+                    med = float(df_proc[col].median())
+                    self.medians_[col] = med if pd.notna(med) else 0.0
+                df_proc[col] = df_proc[col].fillna(self.medians_.get(col, 0.0))
             else:
-                self.medians_[col] = 0.0
-                df_proc[col] = 0.0
+                if is_train:
+                    self.medians_[col] = 0.0
+                df_proc[col] = self.medians_.get(col, 0.0)
 
-        aqi_vals = df_proc.apply(estimate_aqi_from_pollutants, axis=1)
-        # Binary hazard target: 1 if AQI > 200 (Poor, Very Poor, Severe), else 0
-        y_train = (aqi_vals > 200.0).astype(int).values
-        X_train = df_proc[self.feature_cols].values.astype(np.float32)
+        # Causal rolling 3-day averages and 1-day delta per city (uses only <= t)
+        if "City" in df_proc.columns:
+            df_proc["PM2.5_roll3"] = df_proc.groupby("City")["PM2.5"].transform(
+                lambda s: s.rolling(3, min_periods=1).mean()
+            )
+            df_proc["PM10_roll3"] = df_proc.groupby("City")["PM10"].transform(
+                lambda s: s.rolling(3, min_periods=1).mean()
+            )
+            df_proc["PM2.5_diff1"] = df_proc.groupby("City")["PM2.5"].transform(
+                lambda s: s.diff().fillna(0.0)
+            )
+        else:
+            df_proc["PM2.5_roll3"] = df_proc["PM2.5"].rolling(3, min_periods=1).mean()
+            df_proc["PM10_roll3"] = df_proc["PM10"].rolling(3, min_periods=1).mean()
+            df_proc["PM2.5_diff1"] = df_proc["PM2.5"].diff().fillna(0.0)
 
-        self.clf.fit(X_train, y_train)
+        # Estimate today's AQI_t and next-day AQI_{t+1} per city
+        if "AQI" in df_proc.columns and df_proc["AQI"].notna().any():
+            aqi_today = df_proc["AQI"].copy()
+            missing_aqi = aqi_today.isna()
+            if missing_aqi.any():
+                aqi_today.loc[missing_aqi] = df_proc.loc[missing_aqi].apply(estimate_aqi_from_pollutants, axis=1)
+        else:
+            aqi_today = df_proc.apply(estimate_aqi_from_pollutants, axis=1)
+
+        df_proc["_aqi_today"] = aqi_today.astype(float)
+        if "City" in df_proc.columns:
+            df_proc["_aqi_next_day"] = df_proc.groupby("City")["_aqi_today"].shift(-1)
+        else:
+            df_proc["_aqi_next_day"] = df_proc["_aqi_today"].shift(-1)
+
+        # Fill last date of each city with today's AQI so array length matches len(df)
+        df_proc["_aqi_next_day"] = df_proc["_aqi_next_day"].fillna(df_proc["_aqi_today"])
+
+        # Restore original row order of df
+        df_proc = df_proc.loc[df.index]
+
+        X = np.nan_to_num(df_proc[self.feature_cols].values.astype(np.float32), nan=0.0)
+        y_next = (df_proc["_aqi_next_day"].values > 200.0).astype(int)
+        y_today = (df_proc["_aqi_today"].values > 200.0).astype(int)
+        return X, y_next, y_today
+
+    def fit(self, df_train: pd.DataFrame) -> "AmbientAQIPredictor":
+        """Fit medians and next-day hazard forecaster strictly on chronological training split."""
+        X_train, y_next_train, _ = self._prepare_causal_features_and_next_day_target(df_train, is_train=True)
+        self.clf.fit(X_train, y_next_train)
         self.is_fitted = True
         return self
 
     def predict_hazard_proba(self, df_test: pd.DataFrame) -> np.ndarray:
-        """Predict probability of elevated ambient air hazard (AQI > 200)."""
+        """Predict next-day (t+1) probability of elevated ambient air hazard (AQI_{t+1} > 200)."""
         if not self.is_fitted:
             raise RuntimeError("AmbientAQIPredictor must be fitted before calling predict_hazard_proba.")
 
-        df_proc = df_test.copy()
-        for col in self.feature_cols:
-            if col in df_proc.columns:
-                df_proc[col] = df_proc[col].fillna(self.medians_.get(col, 0.0))
-            else:
-                df_proc[col] = self.medians_.get(col, 0.0)
-
-        X_test = df_proc[self.feature_cols].values.astype(np.float32)
+        X_test, _, _ = self._prepare_causal_features_and_next_day_target(df_test, is_train=False)
         if self.clf.classes_.size > 1:
             return self.clf.predict_proba(X_test)[:, 1]
-        return np.zeros(len(df_proc), dtype=float)
+        return np.zeros(len(df_test), dtype=float)
 
     def evaluate(self, df_test: pd.DataFrame) -> Dict[str, float]:
-        """Evaluate ambient hazard classification metrics on chronological test split."""
-        aqi_vals = df_test.apply(estimate_aqi_from_pollutants, axis=1)
-        y_true = (aqi_vals > 200.0).astype(int).values
+        """Evaluate next-day (t+1) hazard forecasting metrics and persistence baseline on test split."""
+        _, y_next_true, y_today = self._prepare_causal_features_and_next_day_target(df_test, is_train=False)
         probs = self.predict_hazard_proba(df_test)
         preds = (probs >= 0.5).astype(int)
 
-        macro_f1 = float(f1_score(y_true, preds, average="macro", zero_division=0))
-        bal_acc = float(balanced_accuracy_score(y_true, preds))
-        roc_auc = float(roc_auc_score(y_true, probs)) if len(np.unique(y_true)) > 1 else 0.5
+        macro_f1 = float(f1_score(y_next_true, preds, average="macro", zero_division=0))
+        bal_acc = float(balanced_accuracy_score(y_next_true, preds))
+        roc_auc = float(roc_auc_score(y_next_true, probs)) if len(np.unique(y_next_true)) > 1 else 0.5
+
+        # Naive persistence baseline: predicting tomorrow's hazard = today's hazard (y_hat_{t+1} = y_t)
+        persist_f1 = float(f1_score(y_next_true, y_today, average="macro", zero_division=0))
+        persist_bal = float(balanced_accuracy_score(y_next_true, y_today))
+
         return {
             "aqi_hazard_macro_f1": round(macro_f1, 4),
             "aqi_hazard_balanced_accuracy": round(bal_acc, 4),
             "aqi_hazard_roc_auc": round(roc_auc, 4),
+            "persistence_baseline_macro_f1": round(persist_f1, 4),
+            "persistence_baseline_balanced_acc": round(persist_bal, 4),
         }
+
+
+def load_real_or_synthetic_cpcb_aqi_data(
+    csv_path: Path = Path("data/raw/india_aqi/city_day.csv"),
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+    """Load real CPCB India city_day.csv (chronological 80/20 split per city), or fallback to synthetic."""
+    if csv_path.exists():
+        df = pd.read_csv(csv_path)
+        # Keep rows with valid Date and at least PM2.5, PM10, or AQI
+        df = df.dropna(subset=["City", "Date"]).copy()
+        df = df[df[["PM2.5", "PM10", "AQI"]].notna().any(axis=1)].copy()
+        df = df.sort_values(["City", "Date"]).reset_index(drop=True)
+
+        train_parts, test_parts = [], []
+        for _, grp in df.groupby("City", sort=False):
+            if len(grp) < 20:
+                continue
+            split_idx = int(0.80 * len(grp))
+            train_parts.append(grp.iloc[:split_idx])
+            test_parts.append(grp.iloc[split_idx:])
+
+        train_df = pd.concat(train_parts, ignore_index=True)
+        test_df = pd.concat(test_parts, ignore_index=True)
+        meta = {
+            "aqi_data_source": "Real_CPCB_city_day.csv",
+            "aqi_task": "Next_Day_Forecast_t_plus_1 (AQI_{t+1} > 200)",
+            "n_cities": int(df["City"].nunique()),
+            "n_train_days": int(len(train_df)),
+            "n_test_days": int(len(test_df)),
+        }
+        return train_df, test_df, meta
+
+    df_syn = generate_synthetic_cpcb_aqi_data(n_days=100, seed=42)
+    train_df = df_syn[df_syn["DayIndex"] < 80].copy()
+    test_df = df_syn[df_syn["DayIndex"] >= 80].copy()
+    meta = {
+        "aqi_data_source": "Synthetic_Fallback",
+        "aqi_task": "Next_Day_Forecast_t_plus_1",
+        "n_cities": int(df_syn["City"].nunique()),
+        "n_train_days": int(len(train_df)),
+        "n_test_days": int(len(test_df)),
+    }
+    return train_df, test_df, meta
 
 
 def generate_synthetic_cpcb_aqi_data(n_days: int = 120, seed: int = 42) -> pd.DataFrame:

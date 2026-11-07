@@ -91,6 +91,41 @@ def compute_false_alerts_per_hour(
     return float(false_alerts / total_baseline_hours)
 
 
+def compute_false_alarm_episodes_per_hour(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    window_step_sec: float = 30.0,
+) -> float:
+    """Calculate distinct 0->1 persisted alarm onset episodes per hour of baseline recording.
+    
+    Unlike compute_false_alerts_per_hour (which counts every active 30s window out of 120/hr
+    during which the 3-of-5 persistence state remains high), this function counts distinct
+    alarm onset transitions (0 -> 1) occurring during ground-truth baseline (y_true == 0).
+    """
+    baseline_mask = y_true == 0
+    baseline_count = int(np.sum(baseline_mask))
+    if baseline_count == 0:
+        return 0.0
+
+    total_baseline_hours = (baseline_count * window_step_sec) / 3600.0
+    k = 5
+    min_pos = 3
+    persisted_preds = np.zeros(len(y_pred), dtype=int)
+    for i in range(len(y_pred)):
+        start = max(0, i - k + 1)
+        if np.sum(y_pred[start : i + 1] == 1) >= min_pos:
+            persisted_preds[i] = 1
+
+    # Count 0 -> 1 onset transitions of persisted_preds where current window is baseline
+    onsets = 0
+    for i in range(len(persisted_preds)):
+        prev_state = persisted_preds[i - 1] if i > 0 else 0
+        if persisted_preds[i] == 1 and prev_state == 0 and baseline_mask[i]:
+            onsets += 1
+
+    return float(onsets / total_baseline_hours)
+
+
 def compute_classification_metrics(
     y_true: np.ndarray,
     y_prob: np.ndarray,
@@ -124,6 +159,7 @@ def compute_classification_metrics(
 
     fa_raw = compute_false_alerts_per_hour(y_true, y_pred, window_step_sec=window_step_sec, persistence_rule=False)
     fa_persisted = compute_false_alerts_per_hour(y_true, y_pred, window_step_sec=window_step_sec, persistence_rule=True)
+    fa_episodes = compute_false_alarm_episodes_per_hour(y_true, y_pred, window_step_sec=window_step_sec)
 
     return {
         "macro_f1": macro_f1,
@@ -135,6 +171,7 @@ def compute_classification_metrics(
         "ece": ece,
         "false_alerts_raw_per_hr": fa_raw,
         "false_alerts_persisted_per_hr": fa_persisted,
+        "false_alarm_episodes_per_hr": fa_episodes,
     }
 
 

@@ -57,7 +57,8 @@ class ConvBlock1D(nn.Module):
         self.conv = nn.Conv1d(
             in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=False
         )
-        self.bn = nn.BatchNorm1d(out_channels)
+        num_groups = 4 if out_channels % 4 == 0 else 1
+        self.bn = nn.GroupNorm(num_groups=num_groups, num_channels=out_channels)
         self.relu = nn.ReLU(inplace=True)
         self.se = SEBlock1D(out_channels) if use_se else nn.Identity()
         self.pool = nn.MaxPool1d(kernel_size=2) if pool else nn.Identity()
